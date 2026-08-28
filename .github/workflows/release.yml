@@ -12,12 +12,12 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4  # Используйте v4, если он работает, или обновитесь до v5/v6 при необходимости
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4  # Используйте v4, или обновитесь до v5
         with:
-          node-version: '22.x'
+          node-version: '22.x'      # Явно указываем Node.js 22
 
       - name: Get version from tag
         id: get_version
@@ -30,7 +30,7 @@ jobs:
         run: npm pack
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2  # Используем v2, которая поддерживает Node.js 24
         with:
           files: '*.tgz'
         env:
