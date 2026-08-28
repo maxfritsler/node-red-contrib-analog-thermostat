@@ -8,7 +8,14 @@
       "analog-thermostat": "nodes/analog-thermostat.js"
     }
   },
-  "keywords": ["node-red", "thermostat", "pid", "analog", "mqtt", "home-assistant"],
+  "keywords": [
+    "node-red",
+    "thermostat",
+    "pid",
+    "analog",
+    "mqtt",
+    "home-assistant"
+  ],
   "author": "Your Name",
   "license": "MIT"
 }
