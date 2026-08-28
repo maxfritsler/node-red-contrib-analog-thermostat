@@ -38,7 +38,6 @@ module.exports = function(RED) {
         }
     }
 
-    // ========== MQTT Discovery ==========
     function buildDiscoveryConfig(node, uniqueId) {
         const baseTopic = node.mqttBaseTopic || 'homeassistant';
         const deviceName = node.mqttDeviceName || 'Analog Thermostat';
@@ -157,7 +156,7 @@ module.exports = function(RED) {
                 node.log('MQTT broker connected: ' + config.mqttBroker);
                 mqttTopics = buildDiscoveryConfig(node, uniqueId);
 
-                // Подписка на команды
+                // Подписка на команды (объектный синтаксис)
                 const subscribeTopics = [
                     mqttTopics.tempCommandTopic,
                     mqttTopics.modeCommandTopic,
@@ -254,7 +253,7 @@ module.exports = function(RED) {
                     }
                 });
 
-                // Функция публикации состояния
+                // Функция публикации состояния (объектный синтаксис)
                 function publishMqttState() {
                     if (!mqttClient || !mqttTopics) return;
                     try {
@@ -308,7 +307,7 @@ module.exports = function(RED) {
 
                 node.publishMqttState = publishMqttState;
 
-                // Отправка discovery
+                // Отправка discovery (объектный синтаксис)
                 if (config.mqttDiscovery !== false) {
                     const discoveryPayload = JSON.stringify(mqttTopics.config);
                     mqttClient.publish({ topic: mqttTopics.discoveryTopic, payload: discoveryPayload, retain: true });
@@ -342,7 +341,7 @@ module.exports = function(RED) {
                     node.log('MQTT Discovery binary_sensor published to ' + activeTopic);
                 }
 
-                // При закрытии узла
+                // При закрытии узла (объектный синтаксис)
                 node.on('close', function(removed, done) {
                     if (mqttClient && mqttTopics) {
                         const topics = [
