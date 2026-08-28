@@ -1,3 +1,4 @@
+node.log('===== ANALOG THERMOSTAT VERSION 1.0.9 (FIXED) =====');
 const AdaptiveController = require('../lib/adaptive-controller');
 const fs = require('fs');
 const path = require('path');
