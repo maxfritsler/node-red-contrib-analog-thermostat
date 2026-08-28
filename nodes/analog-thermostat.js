@@ -38,12 +38,6 @@ module.exports = function(RED) {
         }
     }
 
-    function deleteStateFile(nodeId) {
-        const filePath = getStateFilePath(nodeId);
-        try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (err) {}
-    }
-
-    // ========== MQTT Discovery ==========
     function buildDiscoveryConfig(node, uniqueId) {
         const baseTopic = node.mqttBaseTopic || 'homeassistant';
         const deviceName = node.mqttDeviceName || 'Analog Thermostat';
@@ -51,7 +45,6 @@ module.exports = function(RED) {
         const model = node.mqttModel || 'Analog Thermostat';
 
         const stateTopic = `climate/${uniqueId}/state`;
-        const commandTopic = `climate/${uniqueId}/set`;
         const tempCommandTopic = `climate/${uniqueId}/set_temp`;
         const modeCommandTopic = `climate/${uniqueId}/set_mode`;
         const currentTempTopic = `climate/${uniqueId}/current_temp`;
@@ -82,17 +75,16 @@ module.exports = function(RED) {
             retain: false,
         };
         return {
-            config: config,
+            config,
             discoveryTopic: `${baseTopic}/climate/${uniqueId}/config`,
-            stateTopic: stateTopic,
-            commandTopic: commandTopic,
-            tempCommandTopic: tempCommandTopic,
-            modeCommandTopic: modeCommandTopic,
-            currentTempTopic: currentTempTopic,
-            targetTempTopic: targetTempTopic,
-            modeStateTopic: modeStateTopic,
-            analogOutputTopic: analogOutputTopic,
-            activeTopic: activeTopic
+            stateTopic,
+            tempCommandTopic,
+            modeCommandTopic,
+            currentTempTopic,
+            targetTempTopic,
+            modeStateTopic,
+            analogOutputTopic,
+            activeTopic
         };
     }
 
@@ -148,14 +140,12 @@ module.exports = function(RED) {
             controller.setSchedule(scheduleWithTimezone);
             node.log('Loaded default schedule from UI config');
         }
-
         if (controller.schedule) {
             controller.syncSchedule();
         }
 
-        // ========== MQTT настройки ==========
+        // MQTT
         let mqttClient = null;
-        let mqttDiscoverySent = false;
         let mqttTopics = null;
         let uniqueId = config.mqttUniqueId || 'analog_thermostat_' + node.id;
 
@@ -164,7 +154,6 @@ module.exports = function(RED) {
             if (mqttClient) {
                 node.log('MQTT broker connected: ' + config.mqttBroker);
                 mqttTopics = buildDiscoveryConfig(node, uniqueId);
-                // Подписка на команды (используем объект)
                 const subscribeTopics = [
                     mqttTopics.tempCommandTopic,
                     mqttTopics.modeCommandTopic,
@@ -179,7 +168,6 @@ module.exports = function(RED) {
                     });
                 });
 
-                // Обработчик входящих MQTT сообщений
                 mqttClient.on('message', (topic, payload) => {
                     try {
                         const message = payload.toString();
@@ -261,7 +249,6 @@ module.exports = function(RED) {
                     }
                 });
 
-                // Функция публикации состояния
                 function publishMqttState() {
                     if (!mqttClient || !mqttTopics) return;
                     try {
@@ -319,10 +306,8 @@ module.exports = function(RED) {
                 if (config.mqttDiscovery !== false) {
                     const discoveryPayload = JSON.stringify(mqttTopics.config);
                     mqttClient.publish({ topic: mqttTopics.discoveryTopic, payload: discoveryPayload, retain: true });
-                    mqttDiscoverySent = true;
                     node.log('MQTT Discovery published to ' + mqttTopics.discoveryTopic);
 
-                    // Сенсор аналогового выхода
                     const sensorConfig = {
                         name: node.mqttDeviceName + ' Output',
                         unique_id: uniqueId + '_output',
@@ -336,7 +321,6 @@ module.exports = function(RED) {
                     mqttClient.publish({ topic: sensorTopic, payload: JSON.stringify(sensorConfig), retain: true });
                     node.log('MQTT Discovery sensor published to ' + sensorTopic);
 
-                    // Бинарный сенсор активности
                     const activeSensor = {
                         name: node.mqttDeviceName + ' Active',
                         unique_id: uniqueId + '_active',
@@ -350,7 +334,6 @@ module.exports = function(RED) {
                     node.log('MQTT Discovery binary_sensor published to ' + activeTopic);
                 }
 
-                // При закрытии узла
                 node.on('close', function(removed, done) {
                     if (mqttClient && mqttTopics) {
                         const topics = [
@@ -382,7 +365,7 @@ module.exports = function(RED) {
             }
         }
 
-        // ========== Вспомогательные функции ==========
+        // Вспомогательная функция маппинга
         function mapTemperatureToPercent(temp, minTemp, maxTemp, mapping) {
             if (maxTemp === minTemp) return 50;
             let percent = ((temp - minTemp) / (maxTemp - minTemp)) * 100;
@@ -393,7 +376,7 @@ module.exports = function(RED) {
             return percent;
         }
 
-        // ========== Обновление статуса ==========
+        // Обновление статуса
         function updateStatus(result) {
             const state = result.debug.state;
             const error = result.debug.error;
@@ -424,15 +407,15 @@ module.exports = function(RED) {
                 return;
             }
 
+            const percent = Math.round(mapTemperatureToPercent(result.output, controllerConfig.minTemp, controllerConfig.maxTemp, analogConfig.outputMapping));
+
             if (state === 'learning') {
                 fill = boostActive ? 'yellow' : 'yellow';
                 shape = 'dot';
                 const setpointIcon = activeMode === 'heat' ? '🔥' : '❄️';
-                const percent = Math.round(mapTemperatureToPercent(result.output, controllerConfig.minTemp, controllerConfig.maxTemp, analogConfig.outputMapping));
                 text = `${prefix}Обучение... ${result.debug.currentTemp}°C → ${result.debug.targetTemp}°C → ${setpointIcon} ${percent}%`;
             } else if (trend === 'idle') {
                 fill = boostActive ? 'yellow' : 'grey';
-                const percent = Math.round(mapTemperatureToPercent(result.output, controllerConfig.minTemp, controllerConfig.maxTemp, analogConfig.outputMapping));
                 text = `${prefix}Ожидание ${result.debug.currentTemp}°C (${percent}%)`;
             } else if (trend === 'off') {
                 fill = 'grey';
@@ -440,15 +423,12 @@ module.exports = function(RED) {
             } else {
                 if (Math.abs(error) < controllerConfig.hysteresis) {
                     fill = boostActive ? 'yellow' : 'green';
-                    const percent = Math.round(mapTemperatureToPercent(result.output, controllerConfig.minTemp, controllerConfig.maxTemp, analogConfig.outputMapping));
                     text = `${prefix}✅ ${result.debug.currentTemp}°C → ${result.debug.targetTemp}°C (${percent}%)`;
                 } else if (activeMode === 'heat') {
                     fill = boostActive ? 'yellow' : 'red';
-                    const percent = Math.round(mapTemperatureToPercent(result.output, controllerConfig.minTemp, controllerConfig.maxTemp, analogConfig.outputMapping));
                     text = `${prefix}🔥 ${result.debug.currentTemp}°C → ${result.debug.targetTemp}°C → ${percent}%`;
                 } else {
                     fill = boostActive ? 'yellow' : 'blue';
-                    const percent = Math.round(mapTemperatureToPercent(result.output, controllerConfig.minTemp, controllerConfig.maxTemp, analogConfig.outputMapping));
                     text = `${prefix}❄️ ${result.debug.currentTemp}°C → ${result.debug.targetTemp}°C → ${percent}%`;
                 }
             }
@@ -457,7 +437,7 @@ module.exports = function(RED) {
             if (node.publishMqttState) node.publishMqttState();
         }
 
-        // ========== Обработка входящих сообщений ==========
+        // Обработчик входящих сообщений
         node.on('input', function(msg, send, done) {
             send = send || function() { node.send.apply(node, arguments); };
             try {
@@ -589,12 +569,10 @@ module.exports = function(RED) {
                     payload: finalPercent,
                     topic: msg.topic || 'thermostat/analog'
                 };
-
                 const msg2 = {
                     payload: result.debug,
                     topic: msg.topic ? msg.topic + '/debug' : 'thermostat/debug'
                 };
-
                 const msg3 = {
                     payload: isActive,
                     topic: msg.topic ? msg.topic + '/active' : 'thermostat/active'
