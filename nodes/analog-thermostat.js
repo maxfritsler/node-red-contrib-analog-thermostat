@@ -1,4 +1,4 @@
-node.log('===== ANALOG THERMOSTAT VERSION 1.0.9 (FIXED) =====');
+node.log('===== ANALOG THERMOSTAT VERSION 1.0.10 (CLASSIC MQTT) =====');
 const AdaptiveController = require('../lib/adaptive-controller');
 const fs = require('fs');
 const path = require('path');
@@ -157,7 +157,7 @@ module.exports = function(RED) {
                 node.log('MQTT broker connected: ' + config.mqttBroker);
                 mqttTopics = buildDiscoveryConfig(node, uniqueId);
 
-                // Подписка на команды (объектный синтаксис)
+                // Подписка на команды (классический синтаксис)
                 const subscribeTopics = [
                     mqttTopics.tempCommandTopic,
                     mqttTopics.modeCommandTopic,
@@ -166,7 +166,7 @@ module.exports = function(RED) {
                     `climate/${uniqueId}/set_boost`
                 ];
                 subscribeTopics.forEach(topic => {
-                    mqttClient.subscribe({ topic: topic }, (err) => {
+                    mqttClient.subscribe(topic, (err) => {
                         if (!err) node.log('Subscribed to MQTT topic: ' + topic);
                         else node.warn('Failed to subscribe to ' + topic + ': ' + err);
                     });
@@ -254,7 +254,7 @@ module.exports = function(RED) {
                     }
                 });
 
-                // Функция публикации состояния (объектный синтаксис)
+                // Функция публикации состояния (классический синтаксис)
                 function publishMqttState() {
                     if (!mqttClient || !mqttTopics) return;
                     try {
@@ -276,15 +276,15 @@ module.exports = function(RED) {
                         const isActive = (operatingMode !== 'off') && (Math.abs(result.debug.error) > controllerConfig.hysteresis);
 
                         if (currentTemp !== null && currentTemp !== undefined) {
-                            mqttClient.publish({ topic: mqttTopics.currentTempTopic, payload: String(currentTemp) });
+                            mqttClient.publish(mqttTopics.currentTempTopic, String(currentTemp));
                         }
                         if (targetTemp !== null && targetTemp !== undefined) {
-                            mqttClient.publish({ topic: mqttTopics.targetTempTopic, payload: String(targetTemp) });
+                            mqttClient.publish(mqttTopics.targetTempTopic, String(targetTemp));
                         }
                         const pubMode = (operatingMode === 'off') ? 'off' : mode;
-                        mqttClient.publish({ topic: mqttTopics.modeStateTopic, payload: pubMode });
-                        mqttClient.publish({ topic: mqttTopics.analogOutputTopic, payload: String(finalPercent) });
-                        mqttClient.publish({ topic: mqttTopics.activeTopic, payload: isActive ? 'ON' : 'OFF' });
+                        mqttClient.publish(mqttTopics.modeStateTopic, pubMode);
+                        mqttClient.publish(mqttTopics.analogOutputTopic, String(finalPercent));
+                        mqttClient.publish(mqttTopics.activeTopic, isActive ? 'ON' : 'OFF');
 
                         const fullState = {
                             current_temperature: currentTemp,
@@ -299,7 +299,7 @@ module.exports = function(RED) {
                             error: result.debug.error,
                             trend: result.debug.trend
                         };
-                        mqttClient.publish({ topic: mqttTopics.stateTopic, payload: JSON.stringify(fullState) });
+                        mqttClient.publish(mqttTopics.stateTopic, JSON.stringify(fullState));
                     } catch (err) {
                         node.error('publishMqttState error: ' + err.message);
                         node.error(err.stack);
@@ -308,10 +308,10 @@ module.exports = function(RED) {
 
                 node.publishMqttState = publishMqttState;
 
-                // Отправка discovery (объектный синтаксис)
+                // Отправка discovery (классический синтаксис)
                 if (config.mqttDiscovery !== false) {
                     const discoveryPayload = JSON.stringify(mqttTopics.config);
-                    mqttClient.publish({ topic: mqttTopics.discoveryTopic, payload: discoveryPayload, retain: true });
+                    mqttClient.publish(mqttTopics.discoveryTopic, discoveryPayload, { retain: true });
                     node.log('MQTT Discovery published to ' + mqttTopics.discoveryTopic);
 
                     // Сенсор аналогового выхода
@@ -325,7 +325,7 @@ module.exports = function(RED) {
                         icon: 'mdi:percent'
                     };
                     const sensorTopic = `${node.mqttBaseTopic || 'homeassistant'}/sensor/${uniqueId}_output/config`;
-                    mqttClient.publish({ topic: sensorTopic, payload: JSON.stringify(sensorConfig), retain: true });
+                    mqttClient.publish(sensorTopic, JSON.stringify(sensorConfig), { retain: true });
                     node.log('MQTT Discovery sensor published to ' + sensorTopic);
 
                     // Бинарный сенсор активности
@@ -338,11 +338,11 @@ module.exports = function(RED) {
                         icon: 'mdi:power'
                     };
                     const activeTopic = `${node.mqttBaseTopic || 'homeassistant'}/binary_sensor/${uniqueId}_active/config`;
-                    mqttClient.publish({ topic: activeTopic, payload: JSON.stringify(activeSensor), retain: true });
+                    mqttClient.publish(activeTopic, JSON.stringify(activeSensor), { retain: true });
                     node.log('MQTT Discovery binary_sensor published to ' + activeTopic);
                 }
 
-                // При закрытии узла (объектный синтаксис)
+                // При закрытии узла (классический синтаксис)
                 node.on('close', function(removed, done) {
                     if (mqttClient && mqttTopics) {
                         const topics = [
@@ -353,16 +353,16 @@ module.exports = function(RED) {
                             `climate/${uniqueId}/set_boost`
                         ];
                         topics.forEach(t => {
-                            mqttClient.unsubscribe({ topic: t }, (err) => {
+                            mqttClient.unsubscribe(t, (err) => {
                                 if (err) node.warn('Failed to unsubscribe from ' + t);
                             });
                         });
                         if (config.mqttDiscovery !== false) {
-                            mqttClient.publish({ topic: mqttTopics.discoveryTopic, payload: '', retain: true });
+                            mqttClient.publish(mqttTopics.discoveryTopic, '', { retain: true });
                             const sensorTopic = `${node.mqttBaseTopic || 'homeassistant'}/sensor/${uniqueId}_output/config`;
-                            mqttClient.publish({ topic: sensorTopic, payload: '', retain: true });
+                            mqttClient.publish(sensorTopic, '', { retain: true });
                             const activeTopic = `${node.mqttBaseTopic || 'homeassistant'}/binary_sensor/${uniqueId}_active/config`;
-                            mqttClient.publish({ topic: activeTopic, payload: '', retain: true });
+                            mqttClient.publish(activeTopic, '', { retain: true });
                         }
                     }
                     saveStateToFile(node.id, controller.getState());
