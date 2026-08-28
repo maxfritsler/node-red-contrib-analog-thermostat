@@ -2,6 +2,7 @@
   "name": "node-red-contrib-analog-thermostat",
   "version": "1.0.0",
   "description": "Adaptive PID thermostat with analog 0-100% output and MQTT Discovery for Home Assistant",
+  "main": "nodes/analog-thermostat.js",
   "node-red": {
     "nodes": {
       "analog-thermostat": "nodes/analog-thermostat.js"
