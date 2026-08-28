@@ -1,28 +1,23 @@
 name: Build Package (manual)
 
 on:
-  workflow_dispatch:   # разрешает запуск вручную из интерфейса GitHub
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22.x'
-
-      - name: Install dependencies (if any)
-        run: npm install --production || true   # если зависимостей нет, ошибка игнорируется
-
+      - name: Install deps (if any)
+        run: npm install --production || true
       - name: Pack module
         run: npm pack
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: analog-thermostat-package
           path: '*.tgz'
+          if-no-files-found: error
