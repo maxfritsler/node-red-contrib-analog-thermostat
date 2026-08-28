@@ -19,10 +19,17 @@ jobs:
         run: npm install --production || true
 
       - name: Pack module
-        run: npm pack
+        id: pack
+        run: |
+          PACK_FILE=$(npm pack --dry-run 2>/dev/null | tail -1)
+          echo "pack_file=$PACK_FILE" >> $GITHUB_OUTPUT
+          npm pack
+
+      - name: List files after pack (debug)
+        run: ls -la *.tgz || echo "No .tgz file found"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6   # <-- обновлено с v4 на v6
+        uses: actions/upload-artifact@v6
         with:
           name: analog-thermostat-package
-          path: '*.tgz'
+          path: ${{ steps.pack.outputs.pack_file }}
