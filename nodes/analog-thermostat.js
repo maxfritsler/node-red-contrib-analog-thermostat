@@ -1,10 +1,8 @@
-node.log('===== ANALOG THERMOSTAT VERSION 1.0.10 (CLASSIC MQTT) =====');
 const AdaptiveController = require('../lib/adaptive-controller');
 const fs = require('fs');
 const path = require('path');
 
 module.exports = function(RED) {
-    // Директория для хранения состояния
     const userDir = RED.settings.userDir || process.env.HOME || process.env.USERPROFILE;
     const storageDir = path.join(userDir, '.analog-thermostat');
     if (!fs.existsSync(storageDir)) {
@@ -92,6 +90,9 @@ module.exports = function(RED) {
     function AnalogThermostatNode(config) {
         RED.nodes.createNode(this, config);
         const node = this;
+
+        // === ЛОГ ПРАВИЛЬНОЙ ВЕРСИИ ===
+        node.log('===== ANALOG THERMOSTAT VERSION 1.0.28 (CLASSIC MQTT) =====');
 
         // Нормализация режима
         const modeMap = { 'heating': 'heat', 'cooling': 'cool', 'auto': 'heat_cool' };
