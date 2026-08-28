@@ -1,20 +1,18 @@
 const AdaptiveController = require('../lib/adaptive-controller');
 const fs = require('fs');
 const path = require('path');
-const mqtt = require('mqtt');   // используем нативный клиент, как в оригинале
 
 module.exports = function(RED) {
-    function AnalogThermostatNode(config) {
+    function SmartThermostatNode(config) {
         RED.nodes.createNode(this, config);
-        const node = this;
-        node.log('===== ANALOG THERMOSTAT (ORIGINAL BASED) =====');
+        var node = this;
 
-        // Полностью скопированы параметры из оригинала
-        const modeMap = { 'heating': 'heat', 'cooling': 'cool', 'auto': 'heat_cool' };
-        const configMode = config.mode || 'heat';
-        const normalizedMode = modeMap[configMode] || configMode;
+        // ---------- Параметры (без изменений) ----------
+        var modeMap = { 'heating': 'heat', 'cooling': 'cool', 'auto': 'heat_cool' };
+        var configMode = config.mode || 'heat';
+        var normalizedMode = modeMap[configMode] || configMode;
 
-        const controllerConfig = {
+        var controllerConfig = {
             minTemp: parseFloat(config.minTemp) || 15,
             maxTemp: parseFloat(config.maxTemp) || 25,
             targetTemp: parseFloat(config.targetTemp) || 21,
@@ -28,17 +26,19 @@ module.exports = function(RED) {
             awayTemp: parseFloat(config.awayTemp) || 16
         };
 
-        // Настройка для преобразования выхода в проценты
-        const analogConfig = {
+        // Настройки для аналогового выхода (добавлены, но используются только для вычисления процента)
+        var analogConfig = {
             outputMapping: config.outputMapping || 'direct',
             roundToInteger: config.roundToInteger !== false
         };
 
-        const controller = new AdaptiveController(controllerConfig);
+        var controller = new AdaptiveController(controllerConfig);
+        var wasHeatingActive = false;
+        var wasCoolingActive = false;
 
-        // ------ Восстановление состояния (как в оригинале) ------
-        const userDir = RED.settings.userDir || process.env.HOME || process.env.USERPROFILE;
-        const storageDir = path.join(userDir, '.analog-thermostat');
+        // ---------- Восстановление состояния (как в оригинале) ----------
+        var userDir = RED.settings.userDir || process.env.HOME || process.env.USERPROFILE;
+        var storageDir = path.join(userDir, '.analog-thermostat');
         if (!fs.existsSync(storageDir)) {
             try { fs.mkdirSync(storageDir, { recursive: true }); } catch (err) {
                 node.warn('Could not create storage directory: ' + err.message);
@@ -48,10 +48,10 @@ module.exports = function(RED) {
             return path.join(storageDir, `state-${nodeId}.json`);
         }
         function loadStateFromFile(nodeId) {
-            const filePath = getStateFilePath(nodeId);
+            var filePath = getStateFilePath(nodeId);
             try {
                 if (fs.existsSync(filePath)) {
-                    const data = fs.readFileSync(filePath, 'utf8');
+                    var data = fs.readFileSync(filePath, 'utf8');
                     return JSON.parse(data);
                 }
             } catch (err) {
@@ -60,7 +60,7 @@ module.exports = function(RED) {
             return null;
         }
         function saveStateToFile(nodeId, state) {
-            const filePath = getStateFilePath(nodeId);
+            var filePath = getStateFilePath(nodeId);
             try {
                 fs.writeFileSync(filePath, JSON.stringify(state, null, 2), 'utf8');
             } catch (err) {
@@ -68,7 +68,7 @@ module.exports = function(RED) {
             }
         }
 
-        let savedState = loadStateFromFile(node.id);
+        var savedState = loadStateFromFile(node.id);
         if (!savedState) {
             savedState = node.context().get('controllerState');
             if (savedState) {
@@ -83,7 +83,7 @@ module.exports = function(RED) {
         }
 
         if (config.scheduleEnabled && config.scheduleConfig && !controller.schedule) {
-            const scheduleWithTimezone = { ...config.scheduleConfig, timezone: config.scheduleTimezone || 'local' };
+            var scheduleWithTimezone = Object.assign({}, config.scheduleConfig, { timezone: config.scheduleTimezone || 'local' });
             controller.setSchedule(scheduleWithTimezone);
             node.log('Loaded default schedule from UI config');
         }
@@ -91,95 +91,46 @@ module.exports = function(RED) {
             controller.syncSchedule();
         }
 
-        // ------ MQTT (как в оригинале) ------
-        let mqttClient = null;
-        const uniqueId = config.mqttUniqueId || 'analog_thermostat_' + node.id;
-        const baseTopic = config.mqttBaseTopic || 'homeassistant';
+        // ---------- MQTT (как в оригинале) ----------
+        var mqttClient = null;
+        var uniqueId = config.mqttUniqueId || 'analog_thermostat_' + node.id;
+        var baseTopic = config.mqttBaseTopic || 'homeassistant';
 
-        let brokerUrl = config.mqttBrokerUrl || 'mqtt://localhost:1883';
-        let mqttOptions = {};
         if (config.mqttBroker) {
-            const brokerNode = RED.nodes.getNode(config.mqttBroker);
-            if (brokerNode) {
-                brokerUrl = brokerNode.brokerurl || brokerNode.url || brokerUrl;
-                mqttOptions = {
-                    clientId: brokerNode.clientid || 'analog-thermostat-' + uniqueId,
-                    username: brokerNode.username || '',
-                    password: brokerNode.password || '',
-                    keepalive: brokerNode.keepalive || 60,
-                    rejectUnauthorized: brokerNode.rejectUnauthorized !== false
-                };
-                node.log('MQTT broker URL: ' + brokerUrl);
-            }
-        }
-
-        if (brokerUrl) {
-            try {
-                mqttClient = mqtt.connect(brokerUrl, mqttOptions);
-                mqttClient.on('connect', () => {
-                    node.log('MQTT connected to ' + brokerUrl);
-
-                    // ------ Discovery (точно как в оригинале) ------
-                    if (config.mqttDiscovery !== false) {
-                        const device = {
-                            identifiers: [uniqueId],
-                            name: config.mqttDeviceName || 'Analog Thermostat',
-                            manufacturer: config.mqttManufacturer || 'Node-RED',
-                            model: config.mqttModel || 'Analog Thermostat',
-                            sw_version: '1.0.0'
-                        };
-                        const climateConfig = {
-                            name: config.mqttDeviceName || 'Analog Thermostat',
-                            unique_id: uniqueId,
-                            device: device,
-                            current_temperature_topic: `climate/${uniqueId}/current_temp`,
-                            temperature_command_topic: `climate/${uniqueId}/set_temp`,
-                            temperature_state_topic: `climate/${uniqueId}/target_temp`,
-                            mode_command_topic: `climate/${uniqueId}/set_mode`,
-                            mode_state_topic: `climate/${uniqueId}/mode`,
-                            modes: ['heat', 'cool', 'heat_cool', 'off'],
-                            min_temp: parseFloat(config.minTemp) || 15,
-                            max_temp: parseFloat(config.maxTemp) || 25,
-                            temp_step: parseFloat(config.precision) || 0.5,
-                            retain: false
-                        };
-                        mqttClient.publish(`${baseTopic}/climate/${uniqueId}/config`, JSON.stringify(climateConfig), { retain: true });
-                        node.log('MQTT Discovery published');
-                    }
-
-                    // ------ Подписки (как в оригинале) ------
-                    const commandTopics = [
-                        `climate/${uniqueId}/set_temp`,
-                        `climate/${uniqueId}/set_mode`,
-                        `climate/${uniqueId}/set_operating_mode`,
-                        `climate/${uniqueId}/set_away`,
-                        `climate/${uniqueId}/set_boost`
-                    ];
-                    commandTopics.forEach(t => {
-                        mqttClient.subscribe(t, (err) => {
-                            if (err) node.warn('Failed to subscribe to ' + t);
-                            else node.log('Subscribed to ' + t);
-                        });
+            mqttClient = RED.nodes.getNode(config.mqttBroker);
+            if (mqttClient) {
+                node.log('MQTT broker connected: ' + config.mqttBroker);
+                // Подписки на команды (оригинальный синтаксис)
+                var commandTopics = [
+                    `climate/${uniqueId}/set_temp`,
+                    `climate/${uniqueId}/set_mode`,
+                    `climate/${uniqueId}/set_operating_mode`,
+                    `climate/${uniqueId}/set_away`,
+                    `climate/${uniqueId}/set_boost`
+                ];
+                commandTopics.forEach(function(topic) {
+                    mqttClient.subscribe(topic, function(err) {
+                        if (err) node.warn('Failed to subscribe to ' + topic + ': ' + err);
+                        else node.log('Subscribed to ' + topic);
                     });
                 });
 
-                // ------ Обработка сообщений (как в оригинале) ------
-                mqttClient.on('message', (topic, payload) => {
+                // Обработчик сообщений
+                mqttClient.on('message', function(topic, payload) {
                     try {
-                        const msg = payload.toString();
-                        let stateChanged = false;
-
+                        var msg = payload.toString();
+                        var stateChanged = false;
                         if (topic === `climate/${uniqueId}/set_temp`) {
-                            const temp = parseFloat(msg);
+                            var temp = parseFloat(msg);
                             if (!isNaN(temp)) {
                                 controller.setSetpoint(temp);
                                 node.log('MQTT set temp: ' + temp);
                                 stateChanged = true;
                             }
                         } else if (topic === `climate/${uniqueId}/set_mode`) {
-                            const mode = String(msg).toLowerCase();
-                            const modeMap = { 'heating': 'heat', 'cooling': 'cool', 'auto': 'heat_cool', 'off': 'off' };
-                            const normalized = modeMap[mode] || mode;
+                            var mode = String(msg).toLowerCase();
+                            var modeMap = { 'heating': 'heat', 'cooling': 'cool', 'auto': 'heat_cool', 'off': 'off' };
+                            var normalized = modeMap[mode] || mode;
                             if (['heat', 'cool', 'heat_cool', 'off'].includes(normalized)) {
                                 if (normalized === 'off') {
                                     controller.setOperatingMode('off');
@@ -193,14 +144,14 @@ module.exports = function(RED) {
                                 stateChanged = true;
                             }
                         } else if (topic === `climate/${uniqueId}/set_operating_mode`) {
-                            const opMode = String(msg).toLowerCase();
+                            var opMode = String(msg).toLowerCase();
                             if (['manual', 'schedule', 'off'].includes(opMode)) {
                                 controller.setOperatingMode(opMode);
                                 node.log('MQTT set operating mode: ' + opMode);
                                 stateChanged = true;
                             }
                         } else if (topic === `climate/${uniqueId}/set_away`) {
-                            const val = msg.toLowerCase();
+                            var val = msg.toLowerCase();
                             if (val === 'true' || val === 'on') {
                                 controller.setAwayMode(true);
                                 node.log('MQTT away enabled');
@@ -210,7 +161,7 @@ module.exports = function(RED) {
                                 node.log('MQTT away disabled');
                                 stateChanged = true;
                             } else {
-                                const temp = parseFloat(val);
+                                var temp = parseFloat(val);
                                 if (!isNaN(temp)) {
                                     controller.setAwayMode(temp);
                                     node.log('MQTT away set to ' + temp + '°C');
@@ -224,14 +175,14 @@ module.exports = function(RED) {
                                 stateChanged = true;
                             } else {
                                 try {
-                                    const boost = JSON.parse(msg);
+                                    var boost = JSON.parse(msg);
                                     if (boost.temp && boost.duration) {
                                         controller.setBoost(boost);
                                         node.log('MQTT boost: ' + boost.temp + '°C for ' + boost.duration + 'min');
                                         stateChanged = true;
                                     }
                                 } catch (e) {
-                                    const temp = parseFloat(msg);
+                                    var temp = parseFloat(msg);
                                     if (!isNaN(temp)) {
                                         controller.setBoost({ temp: temp, duration: 60 });
                                         node.log('MQTT boost: ' + temp + '°C for 60min');
@@ -240,7 +191,6 @@ module.exports = function(RED) {
                                 }
                             }
                         }
-
                         if (stateChanged) {
                             saveStateToFile(node.id, controller.getState());
                             publishMqttState();
@@ -250,24 +200,30 @@ module.exports = function(RED) {
                     }
                 });
 
-                mqttClient.on('error', (err) => {
-                    node.error('MQTT error: ' + err.message);
-                });
-
-                // ------ Публикация состояния (как в оригинале) ------
+                // Публикация состояния (оригинал)
                 function publishMqttState() {
-                    if (!mqttClient || !mqttClient.connected) return;
+                    if (!mqttClient) return;
                     try {
-                        const state = controller.getState();
-                        const result = controller.getStatus();
-                        const currentTemp = state.currentTemp;
-                        const targetTemp = state.targetTemp;
-                        const mode = state.mode;
-                        const operatingMode = state.operatingMode;
-                        const away = state.awayMode;
-                        const boost = state.boostActive;
+                        var state = controller.getState();
+                        var result = controller.getStatus();
+                        var currentTemp = state.currentTemp;
+                        var targetTemp = state.targetTemp;
+                        var mode = state.mode;
+                        var operatingMode = state.operatingMode;
+                        var away = state.awayMode;
+                        var boost = state.boostActive;
+                        var pid = result.debug.pid || {};
 
-                        // ----- Отдельные топики (как в оригинале) -----
+                        // Вычисляем процент только для публикации в отдельном топике и для выхода
+                        var percent = mapTemperatureToPercent(
+                            result.output,
+                            controllerConfig.minTemp,
+                            controllerConfig.maxTemp,
+                            analogConfig.outputMapping
+                        );
+                        var finalPercent = analogConfig.roundToInteger ? Math.round(percent) : percent;
+
+                        // Основные топики (как в оригинале)
                         if (currentTemp !== null && currentTemp !== undefined) {
                             mqttClient.publish(`climate/${uniqueId}/current_temp`, String(currentTemp), { retain: true });
                         }
@@ -278,16 +234,10 @@ module.exports = function(RED) {
                         mqttClient.publish(`climate/${uniqueId}/operating_mode`, operatingMode, { retain: true });
                         mqttClient.publish(`climate/${uniqueId}/away`, away ? 'ON' : 'OFF', { retain: true });
                         mqttClient.publish(`climate/${uniqueId}/boost`, boost ? 'ON' : 'OFF', { retain: true });
+                        mqttClient.publish(`climate/${uniqueId}/analog_output`, String(finalPercent), { retain: true });
 
-                        // Добавляем только один дополнительный топик для аналогового выхода
-                        // (если вы хотите, чтобы он был виден в HA как сенсор, но в оригинале его нет)
-                        // Но мы не будем его публиковать в discovery, только если хотим.
-                        // Поскольку оригинал не публикует лишних топиков, мы оставим только state.
-                        // Однако, чтобы видеть процент в MQTT, можно добавить его в state.
-
-                        // ----- Полный state JSON (как в оригинале, но добавляем analog_output) -----
-                        const pid = result.debug.pid || {};
-                        const fullState = {
+                        // Полный state (как в оригинале, добавляем только analog_output)
+                        var fullState = {
                             current_temperature: currentTemp,
                             target_temperature: targetTemp,
                             mode: (operatingMode === 'off') ? 'off' : mode,
@@ -298,22 +248,10 @@ module.exports = function(RED) {
                             error: result.debug.error,
                             trend: result.debug.trend,
                             state: result.debug.state,
-                            active_mode: result.debug.activeMode || 'idle'
-                            // НЕ добавляем analog_output, чтобы сохранить полную совместимость с оригиналом
+                            active_mode: result.debug.activeMode || 'idle',
+                            analog_output: finalPercent
                         };
                         mqttClient.publish(`climate/${uniqueId}/state`, JSON.stringify(fullState), { retain: true });
-
-                        // Для отладки можно публиковать отдельно, но не через discovery
-                        // Топик analog_output (без discovery) – чтобы при необходимости можно было подписаться
-                        const percent = mapTemperatureToPercent(
-                            result.output,
-                            controllerConfig.minTemp,
-                            controllerConfig.maxTemp,
-                            analogConfig.outputMapping
-                        );
-                        const finalPercent = analogConfig.roundToInteger ? Math.round(percent) : percent;
-                        mqttClient.publish(`climate/${uniqueId}/analog_output`, String(finalPercent), { retain: true });
-
                     } catch (err) {
                         node.error('publishMqttState error: ' + err.message);
                     }
@@ -321,31 +259,68 @@ module.exports = function(RED) {
 
                 node.publishMqttState = publishMqttState;
 
-                // ------ Закрытие ------
+                // Отправка Discovery (оригинал + analog_output)
+                if (config.mqttDiscovery !== false) {
+                    var device = {
+                        identifiers: [uniqueId],
+                        name: config.mqttDeviceName || 'Analog Thermostat',
+                        manufacturer: config.mqttManufacturer || 'Node-RED',
+                        model: config.mqttModel || 'Analog Thermostat',
+                        sw_version: '1.0.0'
+                    };
+                    var climateConfig = {
+                        name: config.mqttDeviceName || 'Analog Thermostat',
+                        unique_id: uniqueId,
+                        device: device,
+                        current_temperature_topic: `climate/${uniqueId}/current_temp`,
+                        temperature_command_topic: `climate/${uniqueId}/set_temp`,
+                        temperature_state_topic: `climate/${uniqueId}/target_temp`,
+                        mode_command_topic: `climate/${uniqueId}/set_mode`,
+                        mode_state_topic: `climate/${uniqueId}/mode`,
+                        modes: ['heat', 'cool', 'heat_cool', 'off'],
+                        min_temp: parseFloat(config.minTemp) || 15,
+                        max_temp: parseFloat(config.maxTemp) || 25,
+                        temp_step: parseFloat(config.precision) || 0.5,
+                        retain: false
+                    };
+                    mqttClient.publish(`${baseTopic}/climate/${uniqueId}/config`, JSON.stringify(climateConfig), { retain: true });
+                    node.log('MQTT Discovery published');
+
+                    // Дополнительный сенсор для analog_output (если нужен)
+                    var sensorConfig = {
+                        name: config.mqttDeviceName + ' Output',
+                        unique_id: uniqueId + '_output',
+                        device: device,
+                        state_topic: `climate/${uniqueId}/analog_output`,
+                        unit_of_measurement: '%',
+                        icon: 'mdi:percent'
+                    };
+                    mqttClient.publish(`${baseTopic}/sensor/${uniqueId}_output/config`, JSON.stringify(sensorConfig), { retain: true });
+                }
+
                 node.on('close', function(removed, done) {
                     if (mqttClient) {
-                        mqttClient.end(true, () => {
-                            node.log('MQTT disconnected');
-                            if (done) done();
+                        commandTopics.forEach(function(t) {
+                            mqttClient.unsubscribe(t, function(err) {});
                         });
-                    } else {
-                        if (done) done();
+                        if (config.mqttDiscovery !== false) {
+                            mqttClient.publish(`${baseTopic}/climate/${uniqueId}/config`, '', { retain: true });
+                            mqttClient.publish(`${baseTopic}/sensor/${uniqueId}_output/config`, '', { retain: true });
+                        }
                     }
                     saveStateToFile(node.id, controller.getState());
                     node.log('Controller state saved');
+                    if (done) done();
                 });
-
-            } catch (err) {
-                node.error('Failed to connect MQTT: ' + err.message);
+            } else {
+                node.warn('MQTT broker node not found: ' + config.mqttBroker);
             }
-        } else {
-            node.warn('MQTT broker not configured');
         }
 
-        // ------ Вспомогательная функция для преобразования в проценты ------
+        // ---------- Вспомогательная функция для пересчёта температуры в проценты ----------
         function mapTemperatureToPercent(temp, minTemp, maxTemp, mapping) {
             if (maxTemp === minTemp) return 50;
-            let percent = ((temp - minTemp) / (maxTemp - minTemp)) * 100;
+            var percent = ((temp - minTemp) / (maxTemp - minTemp)) * 100;
             percent = Math.max(0, Math.min(100, percent));
             if (mapping === 'inverse') {
                 percent = 100 - percent;
@@ -353,67 +328,15 @@ module.exports = function(RED) {
             return percent;
         }
 
-        // ------ Обновление статуса (как в оригинале, но с процентами) ------
-        function updateStatus(result) {
-            // Копируем оригинальную логику статуса, но меняем текст, чтобы показывать проценты
-            const error = result.debug.error;
-            const operatingMode = result.debug.operatingMode;
-            const boostActive = result.debug.boostActive;
-            const awayMode = result.debug.awayMode;
-            const activeMode = result.debug.activeMode || 'heat';
-
-            const percent = Math.round(mapTemperatureToPercent(
-                result.output,
-                controllerConfig.minTemp,
-                controllerConfig.maxTemp,
-                analogConfig.outputMapping
-            ));
-
-            let fill = 'grey';
-            let shape = 'ring';
-            let text = '';
-
-            if (boostActive) {
-                fill = 'yellow';
-                shape = 'dot';
-                text = `BOOST ${percent}%`;
-            } else if (awayMode) {
-                fill = 'grey';
-                shape = 'ring';
-                text = `AWAY ${percent}%`;
-            } else if (operatingMode === 'off') {
-                fill = 'grey';
-                shape = 'ring';
-                text = '⏹ OFF';
-            } else if (Math.abs(error) < controllerConfig.hysteresis) {
-                fill = 'green';
-                shape = 'dot';
-                text = `✅ ${percent}% (${result.debug.currentTemp}°C)`;
-            } else if (activeMode === 'heat') {
-                fill = 'red';
-                shape = 'dot';
-                text = `🔥 ${percent}% (${result.debug.currentTemp}°C → ${result.debug.targetTemp}°C)`;
-            } else if (activeMode === 'cool') {
-                fill = 'blue';
-                shape = 'dot';
-                text = `❄️ ${percent}% (${result.debug.currentTemp}°C → ${result.debug.targetTemp}°C)`;
-            } else {
-                fill = 'grey';
-                shape = 'ring';
-                text = `${percent}% (${result.debug.currentTemp}°C)`;
-            }
-            node.status({ fill, shape, text });
-        }
-
-        // ------ Входной обработчик (полностью как в оригинале, но выход преобразован) ------
+        // ---------- Обработчик входных сообщений (оригинал, но msg1.payload заменён на процент) ----------
         node.on('input', function(msg, send, done) {
             send = send || function() { node.send.apply(node, arguments); };
             try {
-                let stateChanged = false;
+                var stateChanged = false;
 
-                // Обработка команд из msg (копия оригинала)
+                // Обработка команд из msg (оригинал)
                 if (msg.setpoint !== undefined) {
-                    const temp = parseFloat(msg.setpoint);
+                    var temp = parseFloat(msg.setpoint);
                     if (!isNaN(temp)) {
                         controller.setSetpoint(temp);
                         node.log('Setpoint changed via msg: ' + temp);
@@ -421,8 +344,8 @@ module.exports = function(RED) {
                     }
                 }
                 if (msg.mode !== undefined) {
-                    const mode = String(msg.mode).toLowerCase();
-                    const normMode = modeMap[mode] || mode;
+                    var mode = String(msg.mode).toLowerCase();
+                    var normMode = modeMap[mode] || mode;
                     if (['heat', 'cool', 'heat_cool'].includes(normMode)) {
                         controller.setMode(normMode);
                         node.log('Mode changed via msg: ' + normMode);
@@ -430,7 +353,7 @@ module.exports = function(RED) {
                     }
                 }
                 if (msg.operatingMode !== undefined) {
-                    const opMode = String(msg.operatingMode).toLowerCase();
+                    var opMode = String(msg.operatingMode).toLowerCase();
                     if (['manual', 'schedule', 'off'].includes(opMode)) {
                         controller.setOperatingMode(opMode);
                         node.log('Operating mode changed via msg: ' + opMode);
@@ -458,38 +381,37 @@ module.exports = function(RED) {
                     if (node.publishMqttState) node.publishMqttState();
                 }
 
-                const currentTemp = parseFloat(msg.payload);
+                var currentTemp = parseFloat(msg.payload);
                 if (isNaN(currentTemp)) {
                     if (done) done();
                     return;
                 }
 
-                const result = controller.update(currentTemp);
+                var result = controller.update(currentTemp);
                 if (controller.hasParametersChanged()) {
                     saveStateToFile(node.id, controller.getState());
                     node.log('PID parameters updated (Kp=' + result.debug.pid.Kp +
                         ', Ki=' + result.debug.pid.Ki + ', Kd=' + result.debug.pid.Kd + ')');
                 }
 
-                // Публикация состояния
                 if (node.publishMqttState) node.publishMqttState();
 
-                // Обновление статуса
-                updateStatus(result);
-
-                // ---- ВЫХОД: преобразуем выход в проценты ----
-                const percent = mapTemperatureToPercent(
+                // Вычисляем процент для выхода
+                var percent = mapTemperatureToPercent(
                     result.output,
                     controllerConfig.minTemp,
                     controllerConfig.maxTemp,
                     analogConfig.outputMapping
                 );
-                const finalPercent = analogConfig.roundToInteger ? Math.round(percent) : percent;
-                const isActive = (controller.operatingMode !== 'off') && (Math.abs(result.debug.error) > controllerConfig.hysteresis);
+                var finalPercent = analogConfig.roundToInteger ? Math.round(percent) : percent;
 
-                const msg1 = { payload: finalPercent, topic: msg.topic || 'thermostat/analog' };
-                const msg2 = { payload: result.debug, topic: msg.topic ? msg.topic + '/debug' : 'thermostat/debug' };
-                const msg3 = { payload: isActive, topic: msg.topic ? msg.topic + '/active' : 'thermostat/active' };
+                // Определяем активность
+                var isActive = (controller.operatingMode !== 'off') && (Math.abs(result.debug.error) > controllerConfig.hysteresis);
+
+                // Формируем выходные сообщения: на первом выходе процент, остальные как в оригинале
+                var msg1 = { payload: finalPercent, topic: msg.topic || 'thermostat/analog' };
+                var msg2 = { payload: result.debug, topic: msg.topic ? msg.topic + '/debug' : 'thermostat/debug' };
+                var msg3 = { payload: isActive, topic: msg.topic ? msg.topic + '/active' : 'thermostat/active' };
 
                 send([msg1, msg2, msg3]);
 
@@ -507,5 +429,5 @@ module.exports = function(RED) {
         });
     }
 
-    RED.nodes.registerType('analog-thermostat', AnalogThermostatNode);
+    RED.nodes.registerType('analog-thermostat', SmartThermostatNode);
 };
