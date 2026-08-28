@@ -36,8 +36,10 @@
         label: function() { return this.name || "analog thermostat"; },
         paletteLabel: "analog thermostat (0-100%)",
         oneditprepare: function() {
+            // Ручное управление вкладками
             var tabs = $('.node-input-tab-headers li');
             var contents = $('.node-input-tab-contents .tab-content');
+
             tabs.on('click', function() {
                 var tabId = $(this).data('tab');
                 tabs.removeClass('active');
@@ -45,6 +47,8 @@
                 contents.hide();
                 $('#' + tabId).show();
             });
+
+            // Показать первую вкладку по умолчанию
             var activeTab = $('.node-input-tab-headers li.active');
             if (activeTab.length === 0) {
                 tabs.first().addClass('active');
@@ -57,6 +61,7 @@
                 $('#' + defaultTab).show();
             }
 
+            // Валидация температур
             function validateTemps() {
                 var min = parseFloat($("#node-input-minTemp").val());
                 var max = parseFloat($("#node-input-maxTemp").val());
@@ -72,6 +77,7 @@
             $("#node-input-minTemp, #node-input-maxTemp, #node-input-targetTemp").on('change', validateTemps);
             validateTemps();
 
+            // Подсказка для маппинга
             $("#node-input-outputMapping").on('change', function() {
                 var val = $(this).val();
                 if (val === 'direct') {
@@ -81,6 +87,7 @@
                 }
             }).trigger('change');
 
+            // Показать/скрыть настройки расписания
             function toggleSchedule() {
                 var enabled = $("#node-input-scheduleEnabled").is(":checked");
                 $(".schedule-config").toggle(enabled);
