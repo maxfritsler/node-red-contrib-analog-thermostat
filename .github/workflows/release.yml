@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'   # срабатывает при пуше тегов вида v1.0.0, v2.1.3 и т.д.
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # нужно для создания релиза
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Set version from tag
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}   # убираем префикс 'v'
+          npm version $VERSION --no-git-tag-version   # обновляем package.json без коммита/тега
+
+      - name: Pack module
+        run: npm pack   # создаст <package-name>-<нов.версия>.tgz
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: '*.tgz'   # прикрепит все .tgz файлы (обычно один)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
