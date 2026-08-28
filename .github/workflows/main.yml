@@ -1,35 +1,23 @@
-name: Auto Release
+name: Release on Tag
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # даём право создавать релизы
+      contents: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
-
-      - name: Install dependencies (if any)
-        run: npm install --production  # если есть зависимости, иначе можно пропустить
-
-      - name: Pack the module
-        run: npm pack
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - run: npm pack
+      - uses: softprops/action-gh-release@v1
         with:
-          name: Release ${{ github.run_number }}
-          tag_name: v${{ github.run_number }}
           files: '*.tgz'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
