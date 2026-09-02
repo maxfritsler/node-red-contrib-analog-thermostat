@@ -11,7 +11,6 @@
             targetTemp: { value: 21, validate: RED.validators.number() },
             hysteresis: { value: 0.2, validate: RED.validators.number() },
             sampleInterval: { value: 60, validate: RED.validators.number() },
-            learningEnabled: { value: true },
             maxOutputChange: { value: 0.5, validate: RED.validators.number() },
             outputMapping: { value: "direct" },
             roundToInteger: { value: true },
@@ -19,14 +18,7 @@
             awayTemp: { value: 16, validate: RED.validators.number() },
             scheduleEnabled: { value: false },
             scheduleConfig: { value: null },
-            scheduleTimezone: { value: "local" },
-            mqttBroker: { value: "", type: "mqtt-broker" },
-            mqttDiscovery: { value: true },
-            mqttBaseTopic: { value: "homeassistant" },
-            mqttUniqueId: { value: "" },
-            mqttDeviceName: { value: "Analog Thermostat" },
-            mqttManufacturer: { value: "Node-RED" },
-            mqttModel: { value: "Analog Thermostat" }
+            scheduleTimezone: { value: "local" }
         },
         inputs: 1,
         outputs: 3,
@@ -36,31 +28,6 @@
         label: function() { return this.name || "analog thermostat"; },
         paletteLabel: "analog thermostat (0-100%)",
         oneditprepare: function() {
-            // Ручное управление вкладками (без RED.tabs)
-            var tabs = $('.node-input-tab-headers li');
-            var contents = $('.node-input-tab-contents .tab-content');
-
-            tabs.on('click', function() {
-                var tabId = $(this).data('tab');
-                tabs.removeClass('active');
-                $(this).addClass('active');
-                contents.hide();
-                $('#' + tabId).show();
-            });
-
-            // Показать первую вкладку по умолчанию
-            var activeTab = $('.node-input-tab-headers li.active');
-            if (activeTab.length === 0) {
-                tabs.first().addClass('active');
-                var firstTab = tabs.first().data('tab');
-                contents.hide();
-                $('#' + firstTab).show();
-            } else {
-                var defaultTab = activeTab.data('tab');
-                contents.hide();
-                $('#' + defaultTab).show();
-            }
-
             // Валидация температур
             function validateTemps() {
                 var min = parseFloat($("#node-input-minTemp").val());
@@ -104,151 +71,111 @@
         <input type="text" id="node-input-name" placeholder="Имя узла">
     </div>
 
-    <div class="node-input-tabs">
-        <ul class="node-input-tab-headers">
-            <li data-tab="tab-settings" class="active">Настройки</li>
-            <li data-tab="tab-schedule">Расписание</li>
-            <li data-tab="tab-mqtt">MQTT Discovery</li>
-        </ul>
-        <div class="node-input-tab-contents">
-            <!-- Вкладка Настройки -->
-            <div id="tab-settings" class="tab-content">
-                <div class="form-row">
-                    <label for="node-input-mode">Режим</label>
-                    <select id="node-input-mode">
-                        <option value="heat">Heat (нагрев)</option>
-                        <option value="cool">Cool (охлаждение)</option>
-                        <option value="heat_cool">Heat/Cool (авто)</option>
-                    </select>
-                </div>
-                <div class="form-row">
-                    <label for="node-input-precision">Точность</label>
-                    <select id="node-input-precision">
-                        <option value="1">1.0 °C</option>
-                        <option value="0.5">0.5 °C</option>
-                        <option value="0.2">0.2 °C</option>
-                        <option value="0.1">0.1 °C</option>
-                    </select>
-                </div>
-                <div class="form-row">
-                    <label for="node-input-minTemp">Мин. температура</label>
-                    <input type="number" id="node-input-minTemp" step="0.1" min="-50" max="50">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-maxTemp">Макс. температура</label>
-                    <input type="number" id="node-input-maxTemp" step="0.1" min="-50" max="50">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-targetTemp">Целевая температура</label>
-                    <input type="number" id="node-input-targetTemp" step="0.1" min="-50" max="50">
-                </div>
-                <div id="temp-warning" style="color:#ff9800; display:none;"></div>
-                <div class="form-row">
-                    <label for="node-input-hysteresis">Гистерезис</label>
-                    <input type="number" id="node-input-hysteresis" step="0.1" min="0" max="5">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-sampleInterval">Интервал выборки (сек)</label>
-                    <input type="number" id="node-input-sampleInterval" step="1" min="1">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-maxOutputChange">Макс. изменение за цикл (°C)</label>
-                    <input type="number" id="node-input-maxOutputChange" step="0.1" min="0.1" max="10">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-learningEnabled">Автообучение PID</label>
-                    <input type="checkbox" id="node-input-learningEnabled" style="width:auto;">
-                </div>
-                <hr>
-                <div class="form-row">
-                    <label for="node-input-outputMapping">Маппинг 0–100%</label>
-                    <select id="node-input-outputMapping">
-                        <option value="direct">Прямой (0% = min, 100% = max)</option>
-                        <option value="inverse">Инверсный (100% = min, 0% = max)</option>
-                    </select>
-                    <span id="mapping-help" style="font-size:0.8em; color:#888; margin-left:10px;"></span>
-                </div>
-                <div class="form-row">
-                    <label for="node-input-roundToInteger">Округлять до целого</label>
-                    <input type="checkbox" id="node-input-roundToInteger" style="width:auto;">
-                </div>
-                <hr>
-                <div class="form-row">
-                    <label for="node-input-operatingMode">Режим работы</label>
-                    <select id="node-input-operatingMode">
-                        <option value="manual">Ручной</option>
-                        <option value="schedule">По расписанию</option>
-                        <option value="off">Выключен</option>
-                    </select>
-                </div>
-                <div class="form-row">
-                    <label for="node-input-awayTemp">Away температура</label>
-                    <input type="number" id="node-input-awayTemp" step="0.1" min="-50" max="50">
-                </div>
-            </div>
+    <div class="form-row">
+        <label for="node-input-mode">Режим</label>
+        <select id="node-input-mode">
+            <option value="heat">Heat (нагрев)</option>
+            <option value="cool">Cool (охлаждение)</option>
+            <option value="heat_cool">Heat/Cool (авто)</option>
+        </select>
+    </div>
 
-            <!-- Вкладка Расписание -->
-            <div id="tab-schedule" class="tab-content" style="display:none;">
-                <div class="form-row">
-                    <label for="node-input-scheduleEnabled">Включить расписание</label>
-                    <input type="checkbox" id="node-input-scheduleEnabled" style="width:auto;">
-                </div>
-                <div class="schedule-config" style="display:none; margin-top:10px;">
-                    <div class="form-row">
-                        <label for="node-input-scheduleTimezone">Часовой пояс</label>
-                        <select id="node-input-scheduleTimezone">
-                            <option value="local">Локальный</option>
-                            <option value="UTC">UTC</option>
-                            <option value="Europe/Moscow">Europe/Moscow</option>
-                            <option value="Europe/London">Europe/London</option>
-                            <option value="America/New_York">America/New_York</option>
-                        </select>
-                    </div>
-                    <div style="background:#f5f5f5; padding:10px; border-radius:4px;">
-                        <p style="margin:0; font-size:0.9em; color:#666;">
-                            <i class="fa fa-info-circle"></i> Расписание задаётся через <code>msg.schedule</code>.
-                            Формат: <code>{ monday: [{time: "06:00", temp: 21}, ...], default: 19 }</code>
-                        </p>
-                    </div>
-                </div>
-            </div>
+    <div class="form-row">
+        <label for="node-input-precision">Точность</label>
+        <select id="node-input-precision">
+            <option value="1">1.0 °C</option>
+            <option value="0.5">0.5 °C</option>
+            <option value="0.2">0.2 °C</option>
+            <option value="0.1">0.1 °C</option>
+        </select>
+    </div>
 
-            <!-- Вкладка MQTT Discovery -->
-            <div id="tab-mqtt" class="tab-content" style="display:none;">
-                <div class="form-row">
-                    <label for="node-input-mqttBroker">MQTT Брокер</label>
-                    <input type="text" id="node-input-mqttBroker" placeholder="выберите брокер...">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-mqttDiscovery">Включить Discovery</label>
-                    <input type="checkbox" id="node-input-mqttDiscovery" style="width:auto;">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-mqttBaseTopic">Базовый топик</label>
-                    <input type="text" id="node-input-mqttBaseTopic" placeholder="homeassistant">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-mqttUniqueId">Уникальный ID</label>
-                    <input type="text" id="node-input-mqttUniqueId" placeholder="оставьте пустым для автогенерации">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-mqttDeviceName">Имя устройства</label>
-                    <input type="text" id="node-input-mqttDeviceName" placeholder="Analog Thermostat">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-mqttManufacturer">Производитель</label>
-                    <input type="text" id="node-input-mqttManufacturer" placeholder="Node-RED">
-                </div>
-                <div class="form-row">
-                    <label for="node-input-mqttModel">Модель</label>
-                    <input type="text" id="node-input-mqttModel" placeholder="Analog Thermostat">
-                </div>
-                <div style="background:#f5f5f5; padding:10px; border-radius:4px; margin-top:10px;">
-                    <p style="margin:0; font-size:0.9em; color:#666;">
-                        <i class="fa fa-info-circle"></i> После включения Discovery, Home Assistant автоматически создаст климат-устройство. Команды принимаются в топиках <code>climate/&lt;unique_id&gt;/set_*</code>.
-                    </p>
-                </div>
-            </div>
+    <div class="form-row">
+        <label for="node-input-minTemp">Мин. температура</label>
+        <input type="number" id="node-input-minTemp" step="0.1" min="-50" max="50">
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-maxTemp">Макс. температура</label>
+        <input type="number" id="node-input-maxTemp" step="0.1" min="-50" max="50">
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-targetTemp">Целевая температура</label>
+        <input type="number" id="node-input-targetTemp" step="0.1" min="-50" max="50">
+    </div>
+    <div id="temp-warning" style="color:#ff9800; display:none;"></div>
+
+    <div class="form-row">
+        <label for="node-input-hysteresis">Гистерезис</label>
+        <input type="number" id="node-input-hysteresis" step="0.1" min="0" max="5">
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-sampleInterval">Интервал выборки (сек)</label>
+        <input type="number" id="node-input-sampleInterval" step="1" min="1">
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-maxOutputChange">Макс. изменение за цикл (°C)</label>
+        <input type="number" id="node-input-maxOutputChange" step="0.1" min="0.1" max="10">
+    </div>
+
+    <hr>
+
+    <div class="form-row">
+        <label for="node-input-outputMapping">Маппинг 0–100%</label>
+        <select id="node-input-outputMapping">
+            <option value="direct">Прямой (0% = min, 100% = max)</option>
+            <option value="inverse">Инверсный (100% = min, 0% = max)</option>
+        </select>
+        <span id="mapping-help" style="font-size:0.8em; color:#888; margin-left:10px;"></span>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-roundToInteger">Округлять до целого</label>
+        <input type="checkbox" id="node-input-roundToInteger" style="width:auto;">
+    </div>
+
+    <hr>
+
+    <div class="form-row">
+        <label for="node-input-operatingMode">Режим работы</label>
+        <select id="node-input-operatingMode">
+            <option value="manual">Ручной</option>
+            <option value="schedule">По расписанию</option>
+            <option value="off">Выключен</option>
+        </select>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-awayTemp">Away температура</label>
+        <input type="number" id="node-input-awayTemp" step="0.1" min="-50" max="50">
+    </div>
+
+    <hr>
+
+    <div class="form-row">
+        <label for="node-input-scheduleEnabled">Включить расписание</label>
+        <input type="checkbox" id="node-input-scheduleEnabled" style="width:auto;">
+    </div>
+
+    <div class="schedule-config" style="display:none; margin-top:10px;">
+        <div class="form-row">
+            <label for="node-input-scheduleTimezone">Часовой пояс</label>
+            <select id="node-input-scheduleTimezone">
+                <option value="local">Локальный</option>
+                <option value="UTC">UTC</option>
+                <option value="Europe/Moscow">Europe/Moscow</option>
+                <option value="Europe/London">Europe/London</option>
+                <option value="America/New_York">America/New_York</option>
+            </select>
+        </div>
+        <div style="background:#f5f5f5; padding:10px; border-radius:4px;">
+            <p style="margin:0; font-size:0.9em; color:#666;">
+                <i class="fa fa-info-circle"></i> Расписание задаётся через <code>msg.schedule</code>.
+                Формат: <code>{ monday: [{time: "06:00", temp: 21}, ...], default: 19 }</code>
+            </p>
         </div>
     </div>
 </script>
