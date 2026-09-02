@@ -1,18 +1,3 @@
-// ========================================================================
-// Аналоговый термостат (0-100%) без встроенного MQTT
-// Вход: msg.payload = текущая температура
-// Выход 1: 0-100% (число)
-// Выход 2: объект состояния (debug)
-// Выход 3: активность (true/false)
-// Команды через msg:
-//   msg.setpoint (number) – уставка
-//   msg.mode (string) – heat, cool, heat_cool
-//   msg.operatingMode (string) – manual, schedule, off
-//   msg.away (boolean или number) – включить/выключить Away или температура
-//   msg.boost (object или boolean) – {temp, duration} или false
-//   msg.schedule (object) – расписание
-// ========================================================================
-
 const AdaptiveController = require('../lib/adaptive-controller');
 const fs = require('fs');
 const path = require('path');
@@ -21,9 +6,8 @@ module.exports = function(RED) {
     function AnalogThermostatNode(config) {
         RED.nodes.createNode(this, config);
         const node = this;
-        node.log('===== ANALOG THERMOSTAT VERSION 3.0.0 (NO MQTT) =====');
+        node.log('===== ANALOG THERMOSTAT VERSION 3.0.1 (FIXED DEBUG) =====');
 
-        // --- Параметры ---
         const modeMap = { 'heating': 'heat', 'cooling': 'cool', 'auto': 'heat_cool' };
         const configMode = config.mode || 'heat';
         const normalizedMode = modeMap[configMode] || configMode;
@@ -34,7 +18,7 @@ module.exports = function(RED) {
             targetTemp: parseFloat(config.targetTemp) || 21,
             hysteresis: parseFloat(config.hysteresis) || 0.2,
             sampleInterval: (parseFloat(config.sampleInterval) || 60) * 1000,
-            learningEnabled: false,          // обучение отключено
+            learningEnabled: false,
             maxOutputChange: parseFloat(config.maxOutputChange) || 0.5,
             precision: parseFloat(config.precision) || 0.5,
             mode: normalizedMode,
@@ -42,19 +26,17 @@ module.exports = function(RED) {
             awayTemp: parseFloat(config.awayTemp) || 16
         };
 
-        // Настройки аналогового выхода
         const analogConfig = {
             outputMapping: config.outputMapping || 'direct',
             roundToInteger: config.roundToInteger !== false
         };
 
         const controller = new AdaptiveController(controllerConfig);
-        // Принудительно выключаем обучение и сбрасываем интеграл
         controller.learningEnabled = false;
         controller.state = 'idle';
         controller.integral = 0;
 
-        // --- Состояние (сохранение/восстановление) ---
+        // Состояние
         const userDir = RED.settings.userDir || process.env.HOME || process.env.USERPROFILE;
         const storageDir = path.join(userDir, '.analog-thermostat');
         if (!fs.existsSync(storageDir)) {
@@ -97,7 +79,7 @@ module.exports = function(RED) {
         }
         if (savedState) {
             controller.setState(savedState);
-            node.log('Restored controller state (Kp=' + savedState.Kp + ', Ki=' + savedState.Ki + ', Kd=' + savedState.Kd + ')');
+            node.log('Restored controller state');
         }
 
         if (config.scheduleEnabled && config.scheduleConfig && !controller.schedule) {
@@ -109,7 +91,6 @@ module.exports = function(RED) {
             controller.syncSchedule();
         }
 
-        // --- Вспомогательная функция маппинга ---
         function mapTemperatureToPercent(temp, minTemp, maxTemp, mapping) {
             if (maxTemp === minTemp) return 50;
             let percent = ((temp - minTemp) / (maxTemp - minTemp)) * 100;
@@ -120,7 +101,6 @@ module.exports = function(RED) {
             return percent;
         }
 
-        // --- Обновление статуса узла ---
         function updateStatus(result) {
             const error = result.debug.error;
             const operatingMode = result.debug.operatingMode;
@@ -153,25 +133,20 @@ module.exports = function(RED) {
             node.status({ fill, shape, text });
         }
 
-        // --- Обработчик входных сообщений ---
+        // ---- Обработчик входных сообщений ----
         node.on('input', function(msg, send, done) {
             send = send || function() { node.send.apply(node, arguments); };
             try {
                 let stateChanged = false;
 
-                // ========== ОБРАБОТКА КОМАНД ИЗ msg ==========
-                // 1. Уставка
                 if (msg.setpoint !== undefined) {
                     const temp = parseFloat(msg.setpoint);
                     if (!isNaN(temp)) {
                         controller.setSetpoint(temp);
                         node.log('Setpoint changed via msg: ' + temp);
                         stateChanged = true;
-                    } else {
-                        node.warn('Invalid setpoint value: ' + msg.setpoint);
                     }
                 }
-                // 2. Режим (heat/cool/heat_cool)
                 if (msg.mode !== undefined) {
                     const mode = String(msg.mode).toLowerCase();
                     const normMode = modeMap[mode] || mode;
@@ -179,54 +154,42 @@ module.exports = function(RED) {
                         controller.setMode(normMode);
                         node.log('Mode changed via msg: ' + normMode);
                         stateChanged = true;
-                    } else {
-                        node.warn('Invalid mode: ' + msg.mode);
                     }
                 }
-                // 3. Режим работы (manual/schedule/off)
                 if (msg.operatingMode !== undefined) {
                     const opMode = String(msg.operatingMode).toLowerCase();
                     if (['manual', 'schedule', 'off'].includes(opMode)) {
                         controller.setOperatingMode(opMode);
                         node.log('Operating mode changed via msg: ' + opMode);
                         stateChanged = true;
-                    } else {
-                        node.warn('Invalid operatingMode: ' + msg.operatingMode);
                     }
                 }
-                // 4. Away
                 if (msg.away !== undefined) {
                     controller.setAwayMode(msg.away);
                     node.log('Away mode changed via msg');
                     stateChanged = true;
                 }
-                // 5. Boost
                 if (msg.boost !== undefined) {
                     controller.setBoost(msg.boost);
                     node.log('Boost changed via msg');
                     stateChanged = true;
                 }
-                // 6. Расписание
                 if (msg.schedule !== undefined) {
                     controller.setSchedule(msg.schedule);
                     node.log('Schedule updated via msg');
                     stateChanged = true;
                 }
 
-                // Если изменилось состояние, сохраняем
                 if (stateChanged) {
                     saveStateToFile(node.id, controller.getState());
                 }
 
-                // ---- Получение текущей температуры ----
                 const currentTemp = parseFloat(msg.payload);
                 if (isNaN(currentTemp)) {
-                    // Если нет температуры, но была команда – просто выходим
                     if (done) done();
                     return;
                 }
 
-                // ---- Основной расчёт ----
                 const result = controller.update(currentTemp);
                 if (controller.hasParametersChanged()) {
                     saveStateToFile(node.id, controller.getState());
@@ -237,7 +200,7 @@ module.exports = function(RED) {
                 // Обновляем статус
                 updateStatus(result);
 
-                // ---- Формируем выходы ----
+                // Вычисляем процент для выходов и debug
                 const percent = mapTemperatureToPercent(
                     result.output,
                     controllerConfig.minTemp,
@@ -247,13 +210,17 @@ module.exports = function(RED) {
                 const finalPercent = analogConfig.roundToInteger ? Math.round(percent) : percent;
                 const isActive = (controller.operatingMode !== 'off') && (Math.abs(result.debug.error) > controllerConfig.hysteresis);
 
-                // Выход 1: 0-100%
+                // Формируем выходные сообщения
                 const msg1 = { payload: finalPercent, topic: msg.topic || 'thermostat/analog' };
 
-                // Выход 2: объект состояния (debug)
-                const msg2 = { payload: result.debug, topic: msg.topic ? msg.topic + '/debug' : 'thermostat/debug' };
+                // Дополняем debug объект полем analog_output и pid (если отсутствует)
+                const debugOut = result.debug;
+                if (!debugOut.analog_output) debugOut.analog_output = finalPercent;
+                if (!debugOut.pid) {
+                    debugOut.pid = { Kp: debugOut.Kp || 0, Ki: debugOut.Ki || 0, Kd: debugOut.Kd || 0 };
+                }
+                const msg2 = { payload: debugOut, topic: msg.topic ? msg.topic + '/debug' : 'thermostat/debug' };
 
-                // Выход 3: активность
                 const msg3 = { payload: isActive, topic: msg.topic ? msg.topic + '/active' : 'thermostat/active' };
 
                 send([msg1, msg2, msg3]);
@@ -261,7 +228,6 @@ module.exports = function(RED) {
                 if (done) done();
             } catch (err) {
                 node.error('Input error: ' + err.message);
-                node.error(err.stack);
                 if (done) done(err);
             }
         });
