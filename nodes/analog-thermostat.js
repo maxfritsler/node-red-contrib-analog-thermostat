@@ -4,7 +4,13 @@
 // Выход 1: 0-100% (число)
 // Выход 2: объект состояния (debug)
 // Выход 3: активность (true/false)
-// Команды через msg: setpoint, mode, operatingMode, away, boost, schedule
+// Команды через msg:
+//   msg.setpoint (number) – уставка
+//   msg.mode (string) – heat, cool, heat_cool
+//   msg.operatingMode (string) – manual, schedule, off
+//   msg.away (boolean или number) – включить/выключить Away или температура
+//   msg.boost (object или boolean) – {temp, duration} или false
+//   msg.schedule (object) – расписание
 // ========================================================================
 
 const AdaptiveController = require('../lib/adaptive-controller');
@@ -153,15 +159,19 @@ module.exports = function(RED) {
             try {
                 let stateChanged = false;
 
-                // Обработка команд из msg
+                // ========== ОБРАБОТКА КОМАНД ИЗ msg ==========
+                // 1. Уставка
                 if (msg.setpoint !== undefined) {
                     const temp = parseFloat(msg.setpoint);
                     if (!isNaN(temp)) {
                         controller.setSetpoint(temp);
                         node.log('Setpoint changed via msg: ' + temp);
                         stateChanged = true;
+                    } else {
+                        node.warn('Invalid setpoint value: ' + msg.setpoint);
                     }
                 }
+                // 2. Режим (heat/cool/heat_cool)
                 if (msg.mode !== undefined) {
                     const mode = String(msg.mode).toLowerCase();
                     const normMode = modeMap[mode] || mode;
@@ -169,43 +179,54 @@ module.exports = function(RED) {
                         controller.setMode(normMode);
                         node.log('Mode changed via msg: ' + normMode);
                         stateChanged = true;
+                    } else {
+                        node.warn('Invalid mode: ' + msg.mode);
                     }
                 }
+                // 3. Режим работы (manual/schedule/off)
                 if (msg.operatingMode !== undefined) {
                     const opMode = String(msg.operatingMode).toLowerCase();
                     if (['manual', 'schedule', 'off'].includes(opMode)) {
                         controller.setOperatingMode(opMode);
                         node.log('Operating mode changed via msg: ' + opMode);
                         stateChanged = true;
+                    } else {
+                        node.warn('Invalid operatingMode: ' + msg.operatingMode);
                     }
                 }
+                // 4. Away
                 if (msg.away !== undefined) {
                     controller.setAwayMode(msg.away);
                     node.log('Away mode changed via msg');
                     stateChanged = true;
                 }
+                // 5. Boost
                 if (msg.boost !== undefined) {
                     controller.setBoost(msg.boost);
                     node.log('Boost changed via msg');
                     stateChanged = true;
                 }
+                // 6. Расписание
                 if (msg.schedule !== undefined) {
                     controller.setSchedule(msg.schedule);
                     node.log('Schedule updated via msg');
                     stateChanged = true;
                 }
 
+                // Если изменилось состояние, сохраняем
                 if (stateChanged) {
                     saveStateToFile(node.id, controller.getState());
                 }
 
+                // ---- Получение текущей температуры ----
                 const currentTemp = parseFloat(msg.payload);
                 if (isNaN(currentTemp)) {
+                    // Если нет температуры, но была команда – просто выходим
                     if (done) done();
                     return;
                 }
 
-                // --- Основной расчёт ---
+                // ---- Основной расчёт ----
                 const result = controller.update(currentTemp);
                 if (controller.hasParametersChanged()) {
                     saveStateToFile(node.id, controller.getState());
@@ -216,7 +237,7 @@ module.exports = function(RED) {
                 // Обновляем статус
                 updateStatus(result);
 
-                // --- Формируем выходы ---
+                // ---- Формируем выходы ----
                 const percent = mapTemperatureToPercent(
                     result.output,
                     controllerConfig.minTemp,
@@ -240,6 +261,7 @@ module.exports = function(RED) {
                 if (done) done();
             } catch (err) {
                 node.error('Input error: ' + err.message);
+                node.error(err.stack);
                 if (done) done(err);
             }
         });
