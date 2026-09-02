@@ -6,7 +6,7 @@ module.exports = function(RED) {
     function AnalogThermostatNode(config) {
         RED.nodes.createNode(this, config);
         const node = this;
-        node.log('===== ANALOG THERMOSTAT VERSION 3.0.1 (FIXED DEBUG) =====');
+        node.log('===== ANALOG THERMOSTAT VERSION 3.0.2 (FULL DEBUG) =====');
 
         const modeMap = { 'heating': 'heat', 'cooling': 'cool', 'auto': 'heat_cool' };
         const configMode = config.mode || 'heat';
@@ -36,7 +36,7 @@ module.exports = function(RED) {
         controller.state = 'idle';
         controller.integral = 0;
 
-        // Состояние
+        // Состояние (сохранение/восстановление)
         const userDir = RED.settings.userDir || process.env.HOME || process.env.USERPROFILE;
         const storageDir = path.join(userDir, '.analog-thermostat');
         if (!fs.existsSync(storageDir)) {
@@ -197,10 +197,7 @@ module.exports = function(RED) {
                         ', Ki=' + result.debug.pid.Ki + ', Kd=' + result.debug.pid.Kd + ')');
                 }
 
-                // Обновляем статус
-                updateStatus(result);
-
-                // Вычисляем процент для выходов и debug
+                // Вычисляем аналоговый процент
                 const percent = mapTemperatureToPercent(
                     result.output,
                     controllerConfig.minTemp,
@@ -210,17 +207,27 @@ module.exports = function(RED) {
                 const finalPercent = analogConfig.roundToInteger ? Math.round(percent) : percent;
                 const isActive = (controller.operatingMode !== 'off') && (Math.abs(result.debug.error) > controllerConfig.hysteresis);
 
+                // Дополняем debug объект полями analog_output и pid (если их нет)
+                const debugOut = result.debug || {};
+                debugOut.analog_output = finalPercent;
+                if (!debugOut.pid) {
+                    debugOut.pid = {
+                        Kp: debugOut.Kp || 0,
+                        Ki: debugOut.Ki || 0,
+                        Kd: debugOut.Kd || 0
+                    };
+                }
+                // Гарантируем наличие Kp, Ki, Kd на верхнем уровне (для совместимости)
+                if (debugOut.Kp === undefined) debugOut.Kp = debugOut.pid.Kp;
+                if (debugOut.Ki === undefined) debugOut.Ki = debugOut.pid.Ki;
+                if (debugOut.Kd === undefined) debugOut.Kd = debugOut.pid.Kd;
+
+                // Обновляем статус узла
+                updateStatus(result);
+
                 // Формируем выходные сообщения
                 const msg1 = { payload: finalPercent, topic: msg.topic || 'thermostat/analog' };
-
-                // Дополняем debug объект полем analog_output и pid (если отсутствует)
-                const debugOut = result.debug;
-                if (!debugOut.analog_output) debugOut.analog_output = finalPercent;
-                if (!debugOut.pid) {
-                    debugOut.pid = { Kp: debugOut.Kp || 0, Ki: debugOut.Ki || 0, Kd: debugOut.Kd || 0 };
-                }
                 const msg2 = { payload: debugOut, topic: msg.topic ? msg.topic + '/debug' : 'thermostat/debug' };
-
                 const msg3 = { payload: isActive, topic: msg.topic ? msg.topic + '/active' : 'thermostat/active' };
 
                 send([msg1, msg2, msg3]);
