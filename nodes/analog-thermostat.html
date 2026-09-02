@@ -28,7 +28,6 @@
         label: function() { return this.name || "analog thermostat"; },
         paletteLabel: "analog thermostat (0-100%)",
         oneditprepare: function() {
-            // Валидация температур
             function validateTemps() {
                 var min = parseFloat($("#node-input-minTemp").val());
                 var max = parseFloat($("#node-input-maxTemp").val());
@@ -44,7 +43,6 @@
             $("#node-input-minTemp, #node-input-maxTemp, #node-input-targetTemp").on('change', validateTemps);
             validateTemps();
 
-            // Подсказка для маппинга
             $("#node-input-outputMapping").on('change', function() {
                 var val = $(this).val();
                 if (val === 'direct') {
@@ -54,7 +52,6 @@
                 }
             }).trigger('change');
 
-            // Показать/скрыть настройки расписания
             function toggleSchedule() {
                 var enabled = $("#node-input-scheduleEnabled").is(":checked");
                 $(".schedule-config").toggle(enabled);
