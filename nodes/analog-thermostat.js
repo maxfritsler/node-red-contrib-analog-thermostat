@@ -3,33 +3,35 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = function (RED) {
-    // Число из конфига с дефолтом, но 0 — допустимое значение
+    // Число с дефолтом; 0 — допустимое значение
     function num(value, def) {
-        const n = parseFloat(value);
+        const n = typeof value === 'string' ? parseFloat(value) : value;
         return Number.isFinite(n) ? n : def;
     }
 
     function toBool(v) {
         if (typeof v === 'boolean') return v;
         if (typeof v === 'number') return v !== 0;
-        const s = String(v).trim().toLowerCase();
-        return ['1', 'true', 'on', 'yes'].includes(s);
+        return ['1', 'true', 'on', 'yes'].includes(String(v).trim().toLowerCase());
     }
 
     function AnalogThermostatNode(config) {
         RED.nodes.createNode(this, config);
         const node = this;
-        node.log('===== ANALOG THERMOSTAT VERSION 3.0.4 (AUTO MAPPING) =====');
+        node.log('===== ANALOG THERMOSTAT VERSION 4.0.0 (PID 0-100%) =====');
 
         // ---------- Параметры ----------
         const modeMap = { heating: 'heat', cooling: 'cool', auto: 'heat_cool' };
-        const normalizeMode = (m) => modeMap[String(m || 'heat').toLowerCase()] || String(m).toLowerCase();
+        const normalizeMode = (m) => {
+            const s = String(m || 'heat').toLowerCase();
+            return modeMap[s] || s;
+        };
 
         let minTemp = num(config.minTemp, 15);
-        let maxTemp = num(config.maxTemp, 25);
+        let maxTemp = num(config.maxTemp, 30);
         if (minTemp >= maxTemp) {
-            node.warn(`minTemp (${minTemp}) >= maxTemp (${maxTemp}); using 15..25`);
-            minTemp = 15; maxTemp = 25;
+            node.warn(`minTemp (${minTemp}) >= maxTemp (${maxTemp}); using 15..30`);
+            minTemp = 15; maxTemp = 30;
         }
 
         const controllerConfig = {
@@ -38,17 +40,19 @@ module.exports = function (RED) {
             targetTemp: num(config.targetTemp, 21),
             hysteresis: num(config.hysteresis, 0.2),
             sampleInterval: num(config.sampleInterval, 60) * 1000,
-            learningEnabled: false,
-            maxOutputChange: num(config.maxOutputChange, 0.5),
+            learningEnabled: config.learningEnabled === true,
+            maxOutputChange: num(config.maxOutputChange, 10),   // %/цикл
             precision: num(config.precision, 0.5),
             mode: normalizeMode(config.mode),
             operatingMode: config.operatingMode || 'manual',
-            awayTemp: num(config.awayTemp, 16)
+            awayTemp: num(config.awayTemp, 16),
+            Kp: num(config.Kp, 20),    // %/°C
+            Ki: num(config.Ki, 0.5),   // %/(°C·мин)
+            Kd: num(config.Kd, 0)      // %·мин/°C
         };
 
-        // 'auto' (по умолчанию): heat -> direct, cool -> inverse.
-        // 'direct' / 'inverse' — жёстко, без учёта режима.
-        const userMapping = config.outputMapping || 'auto';
+        // 'direct' — 0 % = нет воздействия. 'inverse' — только для привода с обратной логикой.
+        const inverse = config.outputMapping === 'inverse';
         const roundToInteger = config.roundToInteger !== false;
 
         const controller = new AdaptiveController(controllerConfig);
@@ -68,7 +72,6 @@ module.exports = function (RED) {
             return null;
         }
 
-        // Дебаунс записи — не дёргаем диск на каждом сообщении
         let saveTimer = null;
         function saveState(immediate = false) {
             const write = () => {
@@ -90,11 +93,9 @@ module.exports = function (RED) {
         }
         if (savedState) {
             controller.setState(savedState);
-            node.log('Restored controller state');
+            node.log('Restored controller state' + (savedState.version === 2 ? '' : ' (legacy format: PID state discarded)'));
         }
-
-        // Принудительно после setState — чтобы восстановленное состояние не включило обучение
-        controller.learningEnabled = false;
+        controller.learningEnabled = controllerConfig.learningEnabled;
 
         if (config.scheduleEnabled && config.scheduleConfig && !controller.schedule) {
             controller.setSchedule({ ...config.scheduleConfig, timezone: config.scheduleTimezone || 'local' });
@@ -102,33 +103,20 @@ module.exports = function (RED) {
         }
         if (controller.schedule) controller.syncSchedule();
 
-        // ---------- Маппинг ----------
-        function mapTemperatureToPercent(temp, mode) {
-            let percent = ((temp - minTemp) / (maxTemp - minTemp)) * 100;
-            percent = Math.max(0, Math.min(100, percent));
-
-            let effective = userMapping;
-            if (effective === 'auto') effective = (mode === 'cool') ? 'inverse' : 'direct';
-
-            return effective === 'inverse' ? 100 - percent : percent;
-        }
-
         // ---------- Статус ----------
-        function updateStatus(dbg, percent, isOff) {
-            const error = Number(dbg.error);
+        function updateStatus(dbg, percent, isOff, rawOutput) {
             const cur = dbg.currentTemp, tgt = dbg.targetTemp;
-            const activeMode = dbg.activeMode || dbg.mode || 'heat';
-
+            const dir = dbg.activeMode || 'idle';
             let fill = 'grey', shape = 'ring', text;
-            if (isOff)                          { text = '⏹ OFF'; }
-            else if (dbg.boostActive)           { fill = 'yellow'; shape = 'dot'; text = `BOOST ${percent}%`; }
-            else if (dbg.awayMode)              { text = `AWAY ${percent}%`; }
-            else if (!Number.isFinite(error))   { text = `${percent}% (error: n/a)`; }
-            else if (Math.abs(error) <= controllerConfig.hysteresis) {
-                fill = 'green'; shape = 'dot'; text = `✅ ${percent}% (${cur}°C)`;
-            } else if (activeMode === 'heat') {
+
+            if (isOff)                    { text = '⏹ OFF'; }
+            else if (dbg.boostActive)     { fill = 'yellow'; shape = 'dot'; text = `BOOST ${percent}% (${cur}°C → ${tgt}°C)`; }
+            else if (dbg.awayMode)        { text = `AWAY ${percent}% (${cur}°C → ${tgt}°C)`; }
+            else if (dir === 'idle' || rawOutput === 0) {
+                fill = 'green'; shape = 'dot'; text = `✅ ${percent}% (${cur}°C / ${tgt}°C)`;
+            } else if (dir === 'heat') {
                 fill = 'red'; shape = 'dot'; text = `🔥 ${percent}% (${cur}°C → ${tgt}°C)`;
-            } else if (activeMode === 'cool') {
+            } else if (dir === 'cool') {
                 fill = 'blue'; shape = 'dot'; text = `❄️ ${percent}% (${cur}°C → ${tgt}°C)`;
             } else {
                 text = `${percent}% (${cur}°C)`;
@@ -159,51 +147,48 @@ module.exports = function (RED) {
                     if (['manual', 'schedule', 'off'].includes(op)) { controller.setOperatingMode(op); stateChanged = true; }
                     else node.warn('Ignored invalid operatingMode: ' + msg.operatingMode);
                 }
-                if (msg.away !== undefined)     { controller.setAwayMode(toBool(msg.away)); stateChanged = true; }
-                if (msg.boost !== undefined)    { controller.setBoost(toBool(msg.boost));   stateChanged = true; }
-                if (msg.schedule !== undefined) { controller.setSchedule(msg.schedule);     stateChanged = true; }
+                if (msg.away !== undefined) {
+                    const a = typeof msg.away === 'number' ? msg.away : toBool(msg.away);
+                    controller.setAwayMode(a); stateChanged = true;
+                }
+                if (msg.boost !== undefined) {
+                    const b = (msg.boost && typeof msg.boost === 'object') ? msg.boost : (toBool(msg.boost) ? { temp: controller.targetTemp + 2, duration: 60 } : false);
+                    controller.setBoost(b); stateChanged = true;
+                }
+                if (msg.schedule !== undefined) { controller.setSchedule(msg.schedule); stateChanged = true; }
+                if (msg.reset !== undefined && toBool(msg.reset)) {
+                    controller.integral = 0; controller.lastOutput = 0; controller.direction = 'idle';
+                    node.log('PID state reset'); stateChanged = true;
+                }
 
                 if (stateChanged) saveState();
 
                 const currentTemp = parseFloat(msg.payload);
-                if (!Number.isFinite(currentTemp)) {
-                    // Команда без температуры — просто применили настройки
-                    return done();
-                }
+                if (!Number.isFinite(currentTemp)) return done();   // только команда
 
                 // --- Расчёт ---
                 const result = controller.update(currentTemp);
-                const dbg = (result && result.debug) ? result.debug : {};
+                const dbg = result.debug || {};
+                const isOff = controller.operatingMode === 'off';
+                const rawOutput = isOff ? 0 : result.output;   // 0..100 % усилия
 
-                // Коэффициенты: берём из dbg.pid, иначе из плоских полей
-                const pid = dbg.pid || { Kp: dbg.Kp ?? 0, Ki: dbg.Ki ?? 0, Kd: dbg.Kd ?? 0 };
-                dbg.pid = pid;
-                if (dbg.Kp === undefined) dbg.Kp = pid.Kp;
-                if (dbg.Ki === undefined) dbg.Ki = pid.Ki;
-                if (dbg.Kd === undefined) dbg.Kd = pid.Kd;
+                let percent = inverse ? 100 - rawOutput : rawOutput;
+                if (roundToInteger) percent = Math.round(percent);
+                else percent = Math.round(percent * 10) / 10;
+
+                const isActive = !isOff && rawOutput > 0;
 
                 if (controller.hasParametersChanged()) {
                     saveState();
-                    node.log(`PID parameters updated (Kp=${pid.Kp}, Ki=${pid.Ki}, Kd=${pid.Kd})`);
+                    node.log(`PID updated (Kp=${dbg.pid.Kp}, Ki=${dbg.pid.Ki}, Kd=${dbg.pid.Kd})`);
                 }
 
-                const activeMode = dbg.activeMode || dbg.mode || controllerConfig.mode;
-                const isOff = controller.operatingMode === 'off';
-                const error = Number(dbg.error);
-
-                let percent = isOff ? 0 : mapTemperatureToPercent(result.output, activeMode);
-                if (roundToInteger) percent = Math.round(percent);
-
-                const isActive = !isOff && Number.isFinite(error) &&
-                                 Math.abs(error) > controllerConfig.hysteresis;
-
                 dbg.analog_output = percent;
+                dbg.effort = rawOutput;
                 dbg.active = isActive;
-                dbg.mode = dbg.mode || activeMode;
-                dbg.activeMode = activeMode;
                 dbg.off = isOff;
 
-                updateStatus(dbg, percent, isOff);
+                updateStatus(dbg, percent, isOff, rawOutput);
 
                 const base = msg.topic || 'thermostat';
                 send([
@@ -220,10 +205,7 @@ module.exports = function (RED) {
 
         node.on('close', function (removed, done) {
             saveState(true);
-            if (removed) {
-                try { fs.unlinkSync(stateFile); } catch (_) { /* файла может не быть */ }
-            }
-            node.log('Controller state saved (close)');
+            if (removed) { try { fs.unlinkSync(stateFile); } catch (_) { /* нет файла */ } }
             done();
         });
     }
