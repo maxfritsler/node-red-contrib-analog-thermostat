@@ -6,8 +6,9 @@ module.exports = function(RED) {
     function AnalogThermostatNode(config) {
         RED.nodes.createNode(this, config);
         const node = this;
-        node.log('===== ANALOG THERMOSTAT VERSION 3.0.2 (FULL DEBUG) =====');
+        node.log('===== ANALOG THERMOSTAT VERSION 3.0.3 (AUTO MAPPING) =====');
 
+        // ---------- Параметры ----------
         const modeMap = { 'heating': 'heat', 'cooling': 'cool', 'auto': 'heat_cool' };
         const configMode = config.mode || 'heat';
         const normalizedMode = modeMap[configMode] || configMode;
@@ -26,17 +27,18 @@ module.exports = function(RED) {
             awayTemp: parseFloat(config.awayTemp) || 16
         };
 
-        const analogConfig = {
-            outputMapping: config.outputMapping || 'direct',
-            roundToInteger: config.roundToInteger !== false
-        };
+        // Пользовательский маппинг (direct / inverse). Но для cool мы будем
+        // автоматически использовать inverse, если пользователь не задал иное.
+        const userMapping = config.outputMapping || 'direct';
+        const roundToInteger = config.roundToInteger !== false;
 
         const controller = new AdaptiveController(controllerConfig);
+        // Принудительно отключаем обучение
         controller.learningEnabled = false;
         controller.state = 'idle';
         controller.integral = 0;
 
-        // Состояние (сохранение/восстановление)
+        // ---------- Состояние (сохранение/восстановление) ----------
         const userDir = RED.settings.userDir || process.env.HOME || process.env.USERPROFILE;
         const storageDir = path.join(userDir, '.analog-thermostat');
         if (!fs.existsSync(storageDir)) {
@@ -91,28 +93,35 @@ module.exports = function(RED) {
             controller.syncSchedule();
         }
 
-        function mapTemperatureToPercent(temp, minTemp, maxTemp, mapping) {
+        // ---------- Вспомогательные функции ----------
+        // Маппинг температуры в 0-100%. Если режим cool, автоматически инвертируем.
+        function mapTemperatureToPercent(temp, minTemp, maxTemp, mode, userMapping) {
             if (maxTemp === minTemp) return 50;
-            let percent = ((temp - minTemp) / (maxTemp - minTemp)) * 100;
+            var percent = ((temp - minTemp) / (maxTemp - minTemp)) * 100;
             percent = Math.max(0, Math.min(100, percent));
-            if (mapping === 'inverse') {
+
+            // Автоматический выбор маппинга по режиму:
+            // heat -> direct, cool -> inverse
+            var effectiveMapping = userMapping;
+            if (mode === 'cool') {
+                // Если пользователь оставил direct (по умолчанию), инвертируем
+                effectiveMapping = (userMapping === 'direct') ? 'inverse' : 'direct';
+            }
+            // Для heat всё остаётся как задано (обычно direct)
+
+            if (effectiveMapping === 'inverse') {
                 percent = 100 - percent;
             }
             return percent;
         }
 
-        function updateStatus(result) {
+        // ---------- Обновление статуса ----------
+        function updateStatus(result, percent) {
             const error = result.debug.error;
             const operatingMode = result.debug.operatingMode;
             const boostActive = result.debug.boostActive;
             const awayMode = result.debug.awayMode;
             const activeMode = result.debug.activeMode || 'heat';
-            const percent = Math.round(mapTemperatureToPercent(
-                result.output,
-                controllerConfig.minTemp,
-                controllerConfig.maxTemp,
-                analogConfig.outputMapping
-            ));
 
             let fill = 'grey', shape = 'ring', text = '';
             if (boostActive) {
@@ -133,7 +142,7 @@ module.exports = function(RED) {
             node.status({ fill, shape, text });
         }
 
-        // ---- Обработчик входных сообщений ----
+        // ---------- Обработчик входных сообщений ----------
         node.on('input', function(msg, send, done) {
             send = send || function() { node.send.apply(node, arguments); };
             try {
@@ -190,6 +199,7 @@ module.exports = function(RED) {
                     return;
                 }
 
+                // --- Основной расчёт ---
                 const result = controller.update(currentTemp);
                 if (controller.hasParametersChanged()) {
                     saveStateToFile(node.id, controller.getState());
@@ -197,35 +207,39 @@ module.exports = function(RED) {
                         ', Ki=' + result.debug.pid.Ki + ', Kd=' + result.debug.pid.Kd + ')');
                 }
 
-                // Вычисляем аналоговый процент
+                // Определяем активный режим для маппинга
+                const activeMode = result.debug.activeMode || result.debug.mode || 'heat';
+
+                // Вычисляем процент с правильным маппингом
                 const percent = mapTemperatureToPercent(
                     result.output,
                     controllerConfig.minTemp,
                     controllerConfig.maxTemp,
-                    analogConfig.outputMapping
+                    activeMode,
+                    userMapping
                 );
-                const finalPercent = analogConfig.roundToInteger ? Math.round(percent) : percent;
+                const finalPercent = roundToInteger ? Math.round(percent) : percent;
                 const isActive = (controller.operatingMode !== 'off') && (Math.abs(result.debug.error) > controllerConfig.hysteresis);
 
-                // Дополняем debug объект полями analog_output и pid (если их нет)
+                // --- Дополняем debug объект ---
                 const debugOut = result.debug || {};
                 debugOut.analog_output = finalPercent;
-                if (!debugOut.pid) {
-                    debugOut.pid = {
-                        Kp: debugOut.Kp || 0,
-                        Ki: debugOut.Ki || 0,
-                        Kd: debugOut.Kd || 0
-                    };
-                }
-                // Гарантируем наличие Kp, Ki, Kd на верхнем уровне (для совместимости)
+                debugOut.active = isActive;
+                debugOut.mode = debugOut.mode || activeMode;
+                debugOut.pid = {
+                    Kp: debugOut.Kp || 0,
+                    Ki: debugOut.Ki || 0,
+                    Kd: debugOut.Kd || 0
+                };
+                // Дублируем для удобства
                 if (debugOut.Kp === undefined) debugOut.Kp = debugOut.pid.Kp;
                 if (debugOut.Ki === undefined) debugOut.Ki = debugOut.pid.Ki;
                 if (debugOut.Kd === undefined) debugOut.Kd = debugOut.pid.Kd;
 
-                // Обновляем статус узла
-                updateStatus(result);
+                // --- Обновляем статус ---
+                updateStatus(result, finalPercent);
 
-                // Формируем выходные сообщения
+                // --- Формируем выходные сообщения ---
                 const msg1 = { payload: finalPercent, topic: msg.topic || 'thermostat/analog' };
                 const msg2 = { payload: debugOut, topic: msg.topic ? msg.topic + '/debug' : 'thermostat/debug' };
                 const msg3 = { payload: isActive, topic: msg.topic ? msg.topic + '/active' : 'thermostat/active' };
@@ -235,6 +249,7 @@ module.exports = function(RED) {
                 if (done) done();
             } catch (err) {
                 node.error('Input error: ' + err.message);
+                node.error(err.stack);
                 if (done) done(err);
             }
         });
