@@ -6,13 +6,25 @@
             name: { value: "" },
             mode: { value: "heat" },
             precision: { value: 0.5 },
-            minTemp: { value: 15, validate: RED.validators.number() },
-            maxTemp: { value: 25, validate: RED.validators.number() },
+            minTemp: {
+                value: 15,
+                validate: function (v) {
+                    var min = parseFloat(v), max = parseFloat(this.maxTemp);
+                    return isFinite(min) && (!isFinite(max) || min < max);
+                }
+            },
+            maxTemp: {
+                value: 25,
+                validate: function (v) {
+                    var max = parseFloat(v), min = parseFloat(this.minTemp);
+                    return isFinite(max) && (!isFinite(min) || max > min);
+                }
+            },
             targetTemp: { value: 21, validate: RED.validators.number() },
             hysteresis: { value: 0.2, validate: RED.validators.number() },
             sampleInterval: { value: 60, validate: RED.validators.number() },
             maxOutputChange: { value: 0.5, validate: RED.validators.number() },
-            outputMapping: { value: "direct" },
+            outputMapping: { value: "auto" },
             roundToInteger: { value: true },
             operatingMode: { value: "manual" },
             awayTemp: { value: 16, validate: RED.validators.number() },
@@ -23,38 +35,60 @@
         inputs: 1,
         outputs: 3,
         icon: "thermometer.svg",
-        inputLabels: "температура / setpoint / mode",
+        inputLabels: "payload=температура; setpoint / mode / operatingMode / away / boost / schedule",
         outputLabels: ["0-100%", "debug / status", "active regulation"],
-        label: function() { return this.name || "analog thermostat"; },
+        label: function () { return this.name || "analog thermostat"; },
         paletteLabel: "analog thermostat (0-100%)",
-        oneditprepare: function() {
+
+        oneditprepare: function () {
+            // --- Проверка температур ---
             function validateTemps() {
                 var min = parseFloat($("#node-input-minTemp").val());
                 var max = parseFloat($("#node-input-maxTemp").val());
                 var target = parseFloat($("#node-input-targetTemp").val());
-                if (min >= max) {
-                    $("#temp-warning").text("Мин. температура должна быть меньше макс.").show();
+                var away = parseFloat($("#node-input-awayTemp").val());
+                var msg = "";
+
+                if (!(min < max)) {
+                    msg = "Мин. температура должна быть меньше макс.";
                 } else if (target < min || target > max) {
-                    $("#temp-warning").text("Целевая температура вне диапазона").show();
-                } else {
-                    $("#temp-warning").hide();
+                    msg = "Целевая температура вне диапазона min..max";
+                } else if (isFinite(away) && (away < min || away > max)) {
+                    msg = "Away-температура вне диапазона min..max";
                 }
+                $("#temp-warning").text(msg).toggle(!!msg);
             }
-            $("#node-input-minTemp, #node-input-maxTemp, #node-input-targetTemp").on('change', validateTemps);
+            $("#node-input-minTemp, #node-input-maxTemp, #node-input-targetTemp, #node-input-awayTemp")
+                .on('change input', validateTemps);
             validateTemps();
 
-            $("#node-input-outputMapping").on('change', function() {
-                var val = $(this).val();
-                if (val === 'direct') {
-                    $("#mapping-help").text('0% = min, 100% = max (нагрев)');
-                } else {
-                    $("#mapping-help").text('100% = min, 0% = max (охлаждение)');
-                }
-            }).trigger('change');
+            // --- Подсказка к маппингу зависит от режима и выбора ---
+            function updateMappingHelp() {
+                var mapping = $("#node-input-outputMapping").val();
+                var mode = $("#node-input-mode").val();
+                var text;
 
+                if (mapping === 'auto') {
+                    text = (mode === 'cool')
+                        ? 'Cool → инверсный: 100% при min, 0% при max'
+                        : (mode === 'heat_cool')
+                            ? 'Heat: прямой, Cool: инверсный (выбирается по активному режиму)'
+                            : 'Heat → прямой: 0% при min, 100% при max';
+                } else if (mapping === 'direct') {
+                    text = '0% = min, 100% = max — независимо от режима';
+                    if (mode === 'cool') text += ' ⚠ для охлаждения обычно нужен инверсный';
+                } else {
+                    text = '100% = min, 0% = max — независимо от режима';
+                    if (mode === 'heat') text += ' ⚠ для нагрева обычно нужен прямой';
+                }
+                $("#mapping-help").text(text);
+            }
+            $("#node-input-outputMapping, #node-input-mode").on('change', updateMappingHelp);
+            updateMappingHelp();
+
+            // --- Расписание ---
             function toggleSchedule() {
-                var enabled = $("#node-input-scheduleEnabled").is(":checked");
-                $(".schedule-config").toggle(enabled);
+                $(".schedule-config").toggle($("#node-input-scheduleEnabled").is(":checked"));
             }
             $("#node-input-scheduleEnabled").on('change', toggleSchedule);
             toggleSchedule();
@@ -69,7 +103,7 @@
     </div>
 
     <div class="form-row">
-        <label for="node-input-mode">Режим</label>
+        <label for="node-input-mode"><i class="fa fa-fire"></i> Режим</label>
         <select id="node-input-mode">
             <option value="heat">Heat (нагрев)</option>
             <option value="cool">Cool (охлаждение)</option>
@@ -91,28 +125,28 @@
         <label for="node-input-minTemp">Мин. температура</label>
         <input type="number" id="node-input-minTemp" step="0.1" min="-50" max="50">
     </div>
-
     <div class="form-row">
         <label for="node-input-maxTemp">Макс. температура</label>
         <input type="number" id="node-input-maxTemp" step="0.1" min="-50" max="50">
     </div>
-
     <div class="form-row">
         <label for="node-input-targetTemp">Целевая температура</label>
         <input type="number" id="node-input-targetTemp" step="0.1" min="-50" max="50">
     </div>
-    <div id="temp-warning" style="color:#ff9800; display:none;"></div>
+    <div class="form-row">
+        <label for="node-input-awayTemp">Away температура</label>
+        <input type="number" id="node-input-awayTemp" step="0.1" min="-50" max="50">
+    </div>
+    <div id="temp-warning" class="form-tips" style="color:#ff9800; display:none; margin-bottom:10px;"></div>
 
     <div class="form-row">
-        <label for="node-input-hysteresis">Гистерезис</label>
+        <label for="node-input-hysteresis">Гистерезис (°C)</label>
         <input type="number" id="node-input-hysteresis" step="0.1" min="0" max="5">
     </div>
-
     <div class="form-row">
         <label for="node-input-sampleInterval">Интервал выборки (сек)</label>
         <input type="number" id="node-input-sampleInterval" step="1" min="1">
     </div>
-
     <div class="form-row">
         <label for="node-input-maxOutputChange">Макс. изменение за цикл (°C)</label>
         <input type="number" id="node-input-maxOutputChange" step="0.1" min="0.1" max="10">
@@ -123,56 +157,11 @@
     <div class="form-row">
         <label for="node-input-outputMapping">Маппинг 0–100%</label>
         <select id="node-input-outputMapping">
+            <option value="auto">Авто (по режиму: heat — прямой, cool — инверсный)</option>
             <option value="direct">Прямой (0% = min, 100% = max)</option>
             <option value="inverse">Инверсный (100% = min, 0% = max)</option>
         </select>
-        <span id="mapping-help" style="font-size:0.8em; color:#888; margin-left:10px;"></span>
     </div>
-
     <div class="form-row">
-        <label for="node-input-roundToInteger">Округлять до целого</label>
-        <input type="checkbox" id="node-input-roundToInteger" style="width:auto;">
-    </div>
-
-    <hr>
-
-    <div class="form-row">
-        <label for="node-input-operatingMode">Режим работы</label>
-        <select id="node-input-operatingMode">
-            <option value="manual">Ручной</option>
-            <option value="schedule">По расписанию</option>
-            <option value="off">Выключен</option>
-        </select>
-    </div>
-
-    <div class="form-row">
-        <label for="node-input-awayTemp">Away температура</label>
-        <input type="number" id="node-input-awayTemp" step="0.1" min="-50" max="50">
-    </div>
-
-    <hr>
-
-    <div class="form-row">
-        <label for="node-input-scheduleEnabled">Включить расписание</label>
-        <input type="checkbox" id="node-input-scheduleEnabled" style="width:auto;">
-    </div>
-
-    <div class="schedule-config" style="display:none; margin-top:10px;">
-        <div class="form-row">
-            <label for="node-input-scheduleTimezone">Часовой пояс</label>
-            <select id="node-input-scheduleTimezone">
-                <option value="local">Локальный</option>
-                <option value="UTC">UTC</option>
-                <option value="Europe/Moscow">Europe/Moscow</option>
-                <option value="Europe/London">Europe/London</option>
-                <option value="America/New_York">America/New_York</option>
-            </select>
-        </div>
-        <div style="background:#f5f5f5; padding:10px; border-radius:4px;">
-            <p style="margin:0; font-size:0.9em; color:#666;">
-                <i class="fa fa-info-circle"></i> Расписание задаётся через <code>msg.schedule</code>.
-                Формат: <code>{ monday: [{time: "06:00", temp: 21}, ...], default: 19 }</code>
-            </p>
-        </div>
-    </div>
-</script>
+        <label>&nbsp;</label>
+        <span id="m
