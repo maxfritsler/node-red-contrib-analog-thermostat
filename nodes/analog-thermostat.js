@@ -42,6 +42,10 @@ module.exports = function (RED) {
             sampleInterval: num(config.sampleInterval, 60) * 1000,
             learningEnabled: config.learningEnabled === true,
             maxOutputChange: num(config.maxOutputChange, 10),   // %/цикл
+            // Зона интегрирования (°C) и предел вклада интеграла (%).
+            // 0 и 100 = поведение версии 2.1.3 без изменений.
+            integralBand: num(config.integralBand, 0),
+            integralMaxShare: num(config.integralMaxShare, 100),
             precision: num(config.precision, 0.5),
             mode: normalizeMode(config.mode),
             operatingMode: config.operatingMode || 'manual',

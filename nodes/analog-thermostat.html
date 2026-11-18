@@ -27,6 +27,8 @@
             maxOutputChange: { value: 10, validate: RED.validators.number() },
             Kp: { value: 20, validate: RED.validators.number() },
             Ki: { value: 0.5, validate: RED.validators.number() },
+            integralBand: { value: 0, validate: RED.validators.number() },
+            integralMaxShare: { value: 100, validate: RED.validators.number() },
             Kd: { value: 0, validate: RED.validators.number() },
             learningEnabled: { value: false },
             outputMapping: { value: "direct" },
@@ -161,6 +163,14 @@
         <input type="number" id="node-input-maxOutputChange" step="1" min="1" max="100">
     </div>
     <div class="form-row">
+        <label for="node-input-integralBand">Зона интегрирования (°C)</label>
+        <input type="number" id="node-input-integralBand" step="0.1" min="0" max="20">
+    </div>
+    <div class="form-row">
+        <label for="node-input-integralMaxShare">Предел вклада интеграла (%)</label>
+        <input type="number" id="node-input-integralMaxShare" step="5" min="0" max="100">
+    </div>
+    <div class="form-row">
         <label for="node-input-learningEnabled">Автоподстройка PID</label>
         <input type="checkbox" id="node-input-learningEnabled" style="width:auto;">
     </div>
@@ -239,5 +249,7 @@
     </ol>
 
     <h3>Настройка</h3>
-    <p><b>Kp</b> — % выхода на 1 °C ошибки (20 → 5 °C = 100 %). <b>Ki</b> — накопление % за минуту на 1 °C ошибки; при перерегулировании уменьшайте первым. Направление нагрев/охлаждение учитывается автоматически; инверсный маппинг нужен только для приводов с обратной логикой.</p>
+    <p><b>Kp</b> — % выхода на 1 °C ошибки (20 → 5 °C = 100 %). <b>Ki</b> — накопление % за минуту на 1 °C ошибки; при перерегулировании уменьшайте первым.
+    <b>Зона интегрирования</b> — интеграл копится только когда |ошибка| не больше этого значения; при большем отклонении накопление замирает и выходом правит Kp. 0 = выключено. Лечит перелёт цели на инерционных объектах, где недогрев длится часами: без зоны интеграл успевает дойти до предела и перестаёт реагировать на приближение к уставке.
+    <b>Предел вклада интеграла</b> — какую долю выхода (%) интеграл вправе дать самостоятельно; 100 = как было, при 60 минимум 40 % выхода всегда остаётся за Kp. Направление нагрев/охлаждение учитывается автоматически; инверсный маппинг нужен только для приводов с обратной логикой.</p>
 </script>
